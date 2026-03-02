@@ -1,0 +1,49 @@
+#set page(
+  margin: (x: 1.5cm, y: 1.5cm),
+)
+#set text(
+  font: "linux libertine",
+  size: 10pt,
+)
+
+= Senior Staff Software Engineer (Backend Systems)
+Berlin, Germany | Remote (EMEA) | dev-example\@email.com | github.com/dev-example
+
+== Profile
+Principal-level engineer with 20 years of experience in distributed systems and high-throughput architecture. Specialized in modern JVM ecosystems (Java 21, Kotlin) and reactive systems. Expert in navigating complex architectural migrations and designing for extreme scale within high-trust, asynchronous environments.
+
+== Technical Expertise
+- Languages: Kotlin, Java 21 (Virtual Threads), Scala, C++, Rust, SQL
+- Infrastructure: Kubernetes (EKS/GKE), Kafka, Terraform, Helm, Prometheus
+- Data & Storage: PostgreSQL, Redis, Cassandra, Event Sourcing
+- Protocols: gRPC, WebSockets, Avro, Protocol Buffers
+
+== Professional Experience
+
+=== Principal Engineer | Global Fintech Hub (Remote)
+Jan 2020 – Present
+- Lead architect for the core payment ledger migration to Java 21, utilizing Virtual Threads to reduce resource overhead by 60 percent.
+- Designed a distributed, event-driven reconciliation engine using Kotlin and Kafka handling 50k+ peak RPS.
+- Implemented high-availability strategies across multiple EU regions to meet 99.99 percent SLA requirements.
+- Established asynchronous communication standards and documentation culture for a distributed engineering org of 150+ people.
+
+=== Staff Backend Developer | Infrastructure Scale-up (Berlin/Hybrid)
+Mar 2014 – Dec 2019
+- Built low-latency telemetry ingestion pipelines using Scala and C++ for real-time monitoring of 10k+ nodes.
+- Orchestrated the phased decommissioning of a legacy PHP monolith into a Kotlin-based microservice mesh.
+- Designed and maintained automated disaster recovery protocols using Terraform and cross-region replication.
+- Mentored three senior-level squads on concurrent programming patterns and reactive stream processing.
+
+=== Senior Software Engineer | Regional Logistics Tech
+Jun 2008 – Feb 2014
+- Developed core routing algorithms for a high-traffic logistics platform using Java and PostgreSQL.
+- Optimized geospatial query performance, reducing database CPU load by 40 percent during peak hours.
+- Managed legacy Node.js services while transitioning critical paths to more robust, typed systems.
+
+== Projects & Contributions
+- Core Contributor to [Open Source Library]: Optimized memory allocation in reactive stream buffers.
+- Technical Paper: "Scaling Virtual Threads in Distributed Financial Systems" (Internal / Conference).
+
+== Education & Certifications
+- Bachelor of Science in Computer Science | Technical University of Berlin
+- Certified Kubernetes Administrator (CKA)
