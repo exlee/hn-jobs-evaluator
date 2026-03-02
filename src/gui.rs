@@ -1,12 +1,15 @@
 use parking_lot::RwLock;
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
-use eframe::egui::{self, Button, Layout};
+use eframe::egui::{self, Button, Color32, FontId, Layout, TextFormat, Widget, text::LayoutJob};
 use serde::{Deserialize, Serialize};
 
 use crate::{
     comments::{self, Comment},
-    evaluation::{Evaluation, create_evaluation_cache, estimate_accurate_tokens, evaluate_comment, evaluate_comment_cached},
+    evaluation::{
+        Evaluation, create_evaluation_cache, estimate_accurate_tokens, evaluate_comment,
+        evaluate_comment_cached,
+    },
 };
 
 #[derive(Serialize, Deserialize, Default, Clone)]
@@ -21,15 +24,63 @@ enum SortColumn {
 struct ProcessingData {
     enabled: bool,
     total: usize,
+    error: usize,
     done: usize,
 }
+
+#[derive(Default, Serialize, Deserialize, Clone, PartialEq, Eq)]
+struct Flags(u8);
+use paste::paste;
+macro_rules! bitset {
+    ($const:ident = $name:ident) => {
+        paste! {
+            pub fn [<set_ $name>](&mut self, value: bool) {
+                if value {
+                    self.0 |= Self::$const;
+                } else {
+                    self.0 &= !Self::$const;
+                }
+            }
+            pub fn [<get_ $name>](&self) -> bool {
+                (self.0 & Self::$const) != 0
+            }
+        }
+    };
+}
+impl Flags {
+    const HIDE: u8 = 1 << 0;
+    const SEEN: u8 = 1 << 1;
+    const IN_PROGRESS: u8 = 1 << 2;
+    bitset!(HIDE = hide);
+    bitset!(SEEN = seen);
+    bitset!(IN_PROGRESS = in_progress);
+}
+
+impl PartialOrd for Flags {
+    fn partial_cmp(&self, _other: &Self) -> Option<std::cmp::Ordering> {
+        if self.0 == Self::HIDE || self.0 == Self::SEEN {
+            Some(std::cmp::Ordering::Greater)
+        } else {
+            None
+        }
+    }
+}
+impl Ord for Flags {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        match self.partial_cmp(other) {
+            None => std::cmp::Ordering::Equal,
+            Some(v) => v,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Default, Clone)]
 #[serde(default)]
 struct AppState {
     processing: ProcessingData,
     cache_key: Option<String>,
-    #[serde(default)]
     cache_key_error: Option<String>,
+    flags: HashMap<u32, Flags>,
     hn_url: String,
     requirements: String,
     pdf_path: Option<String>,
@@ -45,7 +96,6 @@ struct App {
 }
 
 use tokio::sync::Semaphore;
-// In your processing loop
 fn batch_process(comments: &[Comment], state: Arc<RwLock<AppState>>) -> Result<(), String> {
     let mut comments = comments.to_vec();
     comments.sort_by_key(|c| c.created_at);
@@ -63,6 +113,7 @@ fn batch_process(comments: &[Comment], state: Arc<RwLock<AppState>>) -> Result<(
             let mut state = state.write();
             state.processing.total = comments.len();
             state.processing.done = 0;
+            state.processing.error = 0;
         }
 
         for comment in comments {
@@ -128,6 +179,28 @@ fn process_comments(state: Arc<RwLock<AppState>>, force: bool) {
     });
 }
 
+pub struct SizedButton {
+    size: egui::Vec2,
+    label: &'static str,
+}
+impl SizedButton {
+    fn new<T>(size: T, label: &'static str) -> Self
+    where
+        T: Into<egui::Vec2>,
+    {
+        Self {
+            size: size.into(),
+            label,
+        }
+    }
+}
+
+impl Widget for SizedButton {
+    fn ui(self, ui: &mut egui::Ui) -> egui::Response {
+        let button = Button::new(self.label);
+        ui.add_sized(self.size, button)
+    }
+}
 pub trait TableCell {
     //fn table_cell<R>(&mut self, cols: &[f32], col_number: usize, fun: &dyn Fn(&mut egui::Ui) -> R);
     fn table_cell<F>(&mut self, cols: &[f32], avw: f32, col_number: usize, fun: F)
@@ -221,7 +294,19 @@ impl App {
 
     fn render_table(&mut self, ui: &mut egui::Ui) {
         let mut state = self.state.write();
-        let mut indices: Vec<usize> = (0..state.comments.len()).collect();
+        let indices: Vec<usize> = (0..state.comments.len()).collect();
+        let mut indices: Vec<usize> = indices
+            .into_iter()
+            .filter(|i| {
+                let comment_id = state.comments[*i].id;
+                !state
+                    .flags
+                    .get(&comment_id)
+                    .cloned()
+                    .unwrap_or_default()
+                    .get_hide()
+            })
+            .collect();
 
         // Sorting logic
         indices.sort_by(|&a, &b| {
@@ -246,6 +331,11 @@ impl App {
             };
             if state.descending { res.reverse() } else { res }
         });
+
+        // indices.sort_by_key(|i| {
+        //     let comment_id = state.comments[*i].id;
+        //     state.flags.entry(comment_id).or_default().clone()
+        // });
 
         let cols = vec![0.1, 0.375, 0.125, 0.125, 0.125, 0.03, 0.12];
         let available_w = ui.available_width();
@@ -304,8 +394,20 @@ impl App {
                     .show(ui, |ui| {
                         for row_idx in row_range {
                             let idx = indices[row_idx];
-                            let comment = &state.comments[idx];
+                            let comment = &state.comments[idx].clone();
                             let eval = state.evaluations.get(&comment.id);
+                            let flags = state.flags.get(&comment.id).cloned().unwrap_or_default();
+
+                            if flags.get_in_progress() {
+                                ui.style_mut().visuals.override_text_color =
+                                    Some(egui::Color32::from_rgb(100, 255, 100));
+                                //ui.style_mut().visuals.override_text_color = Some(egui::Color32::GREEN);
+                            } else if flags.get_seen() {
+                                ui.style_mut().visuals.override_text_color =
+                                    Some(egui::Color32::from_white_alpha(64));
+                            } else {
+                                ui.style_mut().visuals.override_text_color = None;
+                            }
                             // CreatedAt
                             ui.table_cell(&cols, available_w, 0, |ui| {
                                 ui.vertical_centered(|ui| {
@@ -380,12 +482,60 @@ impl App {
                             });
 
                             ui.table_cell(&cols, available_w, 6, |ui| {
-                                let button = Button::new("Evaluate");
+                                let button_size = egui::vec2(
+                                    available_w * cols[6] * 0.6,
+                                    ui.spacing().interact_size.y,
+                                );
+                                let button = SizedButton::new(button_size, "Evaluate");
                                 let resp = ui.add_enabled(state.cache_key.is_some(), button);
 
                                 if resp.clicked() {
-                                    evaluate_single_comment(comment, self.state.clone());
+                                    evaluate_single_comment(&comment.clone(), self.state.clone());
                                 };
+                                let mut flags =
+                                    state.flags.get(&comment.id).cloned().unwrap_or_default();
+
+                                if flags.get_hide() {
+                                    let resp = ui.add(SizedButton::new(button_size, "Unhide"));
+                                    if resp.clicked() {
+                                        flags.set_hide(false);
+                                        state.flags.insert(comment.id.clone(), flags.clone());
+                                    }
+                                } else {
+                                    let resp = ui.add(SizedButton::new(button_size, "Hide"));
+                                    if resp.clicked() {
+                                        flags.set_hide(true);
+                                        state.flags.insert(comment.id.clone(), flags.clone());
+                                    }
+                                }
+                                if flags.get_seen() {
+                                    let resp =
+                                        ui.add(SizedButton::new(button_size, "Set not-seen"));
+                                    if resp.clicked() {
+                                        flags.set_seen(false);
+                                        state.flags.insert(comment.id.clone(), flags.clone());
+                                    }
+                                } else {
+                                    let resp = ui.add(SizedButton::new(button_size, "Set seen"));
+                                    if resp.clicked() {
+                                        flags.set_seen(true);
+                                        state.flags.insert(comment.id.clone(), flags.clone());
+                                    }
+                                }
+                                if flags.get_in_progress() {
+                                    let resp =
+                                        ui.add(SizedButton::new(button_size, "Not In Progress"));
+                                    if resp.clicked() {
+                                        flags.set_in_progress(false);
+                                        state.flags.insert(comment.id.clone(), flags.clone());
+                                    }
+                                } else {
+                                    let resp = ui.add(SizedButton::new(button_size, "In Progress"));
+                                    if resp.clicked() {
+                                        flags.set_in_progress(true);
+                                        state.flags.insert(comment.id.clone(), flags.clone());
+                                    }
+                                }
                             });
 
                             ui.end_row();
@@ -433,8 +583,15 @@ async fn evaluate_single_comment_sem(comment: &Comment, app_state: Arc<RwLock<Ap
     let eval = evaluate_comment_cached(&comment, &cache_key, &api_key).await;
     {
         let mut state_w = app_state.write();
-        state_w.evaluations.insert(id, eval);
-        state_w.processing.done += 1;
+        match eval {
+            Ok(e) => {
+                state_w.evaluations.insert(id, e);
+                state_w.processing.done += 1;
+            }
+            Err(_) => {
+                state_w.processing.error += 1;
+            }
+        }
     }
 }
 fn evaluate_single_comment(comment: &Comment, app_state: Arc<RwLock<AppState>>) {
@@ -454,8 +611,15 @@ fn evaluate_single_comment(comment: &Comment, app_state: Arc<RwLock<AppState>>) 
         let eval = evaluate_comment_cached(&comment, &cache_key, &api_key).await;
         {
             let mut state_w = app_state.write();
-            state_w.evaluations.insert(id, eval);
-            state_w.processing.done += 1;
+            match eval {
+                Ok(e) => {
+                    state_w.evaluations.insert(id, e);
+                    state_w.processing.done += 1;
+                }
+                Err(_) => {
+                    state_w.processing.error += 1;
+                }
+            }
         }
     });
 }
@@ -502,19 +666,37 @@ impl eframe::App for App {
                             ui.label("Cache key: OK");
                         } else {
                             match &state.cache_key_error {
-                                Some(err) => ui.label(egui::RichText::new(format!("Cache key error: {}", err)).color(egui::Color32::RED)),
+                                Some(err) => ui.label(
+                                    egui::RichText::new(format!("Cache key error: {}", err))
+                                        .color(egui::Color32::RED),
+                                ),
 
                                 None => ui.label("Cache key: None"),
                             };
                         }
 
                         if state.processing.enabled {
-                            ui.label(format!(
-                                "Processing: {}/{}",
-                                state.processing.done, state.processing.total
-                            ));
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 0.0;
+
+                                ui.label("Processing: ");
+                                ui.colored_label(Color32::GREEN, state.processing.done.to_string());
+                                ui.label("/");
+                                ui.colored_label(Color32::RED, state.processing.error.to_string());
+                                ui.label(format!("/{}", state.processing.total));
+                            });
+                        } else if state.processing.total > 0 {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 0.0;
+
+                                ui.label("Processing (stopped): ");
+                                ui.colored_label(Color32::GREEN, state.processing.done.to_string());
+                                ui.label("/");
+                                ui.colored_label(Color32::RED, state.processing.error.to_string());
+                                ui.label(format!("/{}", state.processing.total));
+                            });
                         } else {
-                            ui.label("Processing disabled");
+                            ui.label("Processing stopped");
                         }
                         ui.add_space(10.0);
                         ui.separator();
@@ -555,7 +737,7 @@ impl eframe::App for App {
                     });
                     ui.with_layout(Layout::top_down_justified(egui::Align::Min), |ui| {
                         let tokens_count = estimate_accurate_tokens(&state.requirements);
-                        ui.label(format!("Requirements (token count: {}):", tokens_count ));
+                        ui.label(format!("Requirements (token count: {}):", tokens_count));
                         egui::Frame::group(ui.style())
                             .fill(ui.visuals().extreme_bg_color)
                             .inner_margin(2.0)

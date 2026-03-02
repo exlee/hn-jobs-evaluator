@@ -1,8 +1,9 @@
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
-use tokenizers::Tokenizer;
+use std::io::Read;
 use std::sync::OnceLock;
 use std::{fs, path::Path};
-use std::io::Read;
+use tokenizers::Tokenizer;
 
 use crate::comments::Comment;
 
@@ -26,7 +27,7 @@ pub async fn evaluate_comment_cached(
     comment: &Comment,
     cache_name: &str, // Pass the name from Step 1
     api_key: &str,
-) -> Evaluation {
+) -> anyhow::Result<Evaluation> {
     let client = reqwest::Client::new();
 
     let prompt = format!(
@@ -65,40 +66,44 @@ pub async fn evaluate_comment_cached(
         .json(&payload)
         .send()
         .await
-        .unwrap()
+        .context("Send failure")?
         .json()
         .await
-        .unwrap();
+        .context("JSON unwrap failure")?;
     dbg!(&res);
     let raw_json = res["candidates"][0]["content"]["parts"][0]["text"]
         .as_str()
-        .unwrap();
+        .context("Data unwrap error")?;
 
     //let raw_json = raw_json.strip_prefix("```json").unwrap_or(raw_json);
     //let raw_json = raw_json.strip_suffix("```").unwrap_or(raw_json);
 
-    serde_json::from_str(raw_json).unwrap()
+    serde_json::from_str(raw_json).context("Deserialization error")
 }
 
-pub async fn create_evaluation_cache(api_key: &str, pdf_path: &Path, requirements: &str) -> Result<String,String> {
+pub async fn create_evaluation_cache(
+    api_key: &str,
+    pdf_path: &Path,
+    requirements: &str,
+) -> Result<String, String> {
     let client = reqwest::Client::new();
     let pdf_data = fs::read(pdf_path).unwrap();
 
     #[allow(deprecated)]
     let payload = serde_json::json!({
-            "model": "models/gemini-3-flash-preview",
-            "ttl": "3600s", // 1 hour
-            "contents": [
-                {
-                    "role": "user",
-                    "parts": [
-                        { "inline_data": { "mime_type": "application/pdf", "data": base64::encode(pdf_data) } },
-                        { "text": format!("Base Requirements for evaluation: {}", requirements) }
-                    ]
+        "model": "models/gemini-3-flash-preview",
+        "ttl": "3600s", // 1 hour
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    { "inline_data": { "mime_type": "application/pdf", "data": base64::encode(pdf_data) } },
+                    { "text": format!("Base Requirements for evaluation: {}", requirements) }
+                ]
 
-                }
-            ],
-        });
+            }
+        ],
+    });
 
     let url = format!(
         "https://generativelanguage.googleapis.com/v1beta/cachedContents?key={}",
@@ -119,8 +124,8 @@ pub async fn create_evaluation_cache(api_key: &str, pdf_path: &Path, requirement
     if let Some(Some(error_msg)) = res.get("error").map(|e| e.get("message")) {
         return Err(error_msg.to_string());
     } else {
-    // Returns the cache name, e.g., "cachedContents/12345abcde"
-    Ok(res["name"].as_str().unwrap().to_string())
+        // Returns the cache name, e.g., "cachedContents/12345abcde"
+        Ok(res["name"].as_str().unwrap().to_string())
     }
 }
 
@@ -195,13 +200,9 @@ pub async fn evaluate_comment(
 static COMPRESSED_TOKENIZER: &[u8] = include_bytes!("../assets/tokenizer.json.zst");
 static TOKENIZER: OnceLock<Tokenizer> = OnceLock::new();
 pub fn estimate_accurate_tokens(text: &str) -> usize {
-let tok = TOKENIZER.get_or_init(|| {
-        get_tokenizer()
-    });
+    let tok = TOKENIZER.get_or_init(|| get_tokenizer());
 
-    tok.encode(text, true)
-        .map(|e| e.len())
-        .unwrap_or(0)
+    tok.encode(text, true).map(|e| e.len()).unwrap_or(0)
 }
 fn get_tokenizer() -> Tokenizer {
     // Decompress zstd blob into a vector

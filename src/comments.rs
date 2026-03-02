@@ -75,30 +75,22 @@ pub fn flatten_comments(node: &serde_json::Value, parent_id: u32, acc: &mut Vec<
 }
 pub fn clean_html(html: &str) -> String {
     let fragment = scraper::Html::parse_fragment(html);
-    let selector = scraper::Selector::parse("p").unwrap();
 
-    let mut paragraphs: Vec<String> = fragment
-        .select(&selector)
-        .map(|p| p.text().collect::<String>().trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
-
-    let root_text = fragment
+    fragment
         .root_element()
-        .text()
-        .next()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
+        .children()
+        .filter_map(|node| {
+            let text = match scraper::ElementRef::wrap(node) {
+                Some(el) => el.text().collect::<String>(),
+                None => node.value().as_text()?.to_string(),
+            };
 
-    if let Some(leading) = root_text {
-        if paragraphs.first().map_or(true, |p| !p.contains(&leading)) {
-            paragraphs.insert(0, leading);
-        }
-    }
-
-    paragraphs.join("\n\n")
+            let trimmed = text.trim();
+            (!trimmed.is_empty()).then_some(trimmed.to_string())
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
-
 pub fn filter_top_level(comments: &[Comment], thread_root_id: u32) -> Vec<&Comment> {
     comments
         .iter()
