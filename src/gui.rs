@@ -698,6 +698,13 @@ impl eframe::App for App {
                         } else {
                             ui.label("Processing stopped");
                         }
+                        let mut evaluated = 0;
+                        for c in state.comments.iter() {
+                            if state.evaluations.contains_key(&c.id) {
+                                evaluated += 1;
+                            }
+                        }
+                        ui.label(format!("Evaluated: {}/{}", evaluated, state.comments.len()));
                         ui.add_space(10.0);
                         ui.separator();
                         ui.with_layout(
