@@ -219,7 +219,7 @@ impl App {
                 let toml_string = std::fs::read_to_string("run_spec.toml")
                     .map_err(|_| String::from("can't read toml"))
                     .ok()?;
-                let run_spec: crate::RunSpec = toml::from_str(&toml_string)
+                let run_spec: RunSpec = toml::from_str(&toml_string)
                     .map_err(|_| String::from("Toml mapping error"))
                     .ok()?;
                 Some(AppState {
@@ -242,6 +242,21 @@ impl App {
         let indices: Vec<usize> = (0..state.comments.len()).collect();
         let mut indices: Vec<usize> = indices
             .into_iter()
+            .filter(|i| {
+                if state.search_string.is_empty() {
+                    return true;
+                }
+                let mut matches = false;
+                let comment = state.comments[*i].clone();
+                if let Some(evaluation) = state.evaluations.get(&comment.id) {
+                }
+                if let Some(t) = comment.text 
+                    && t.contains(&state.search_string) {
+                        matches = true;
+                }
+                matches
+
+            })
             .filter(|i| {
                 let comment_id = state.comments[*i].id;
                 !state
@@ -512,7 +527,7 @@ fn evaluate_single_comment_live(comment: &Comment, app_state: Arc<RwLock<AppStat
     });
 }
 
-async fn evaluate_single_comment_sem(comment: &Comment, app_state: Arc<RwLock<AppState>>) -> Result<(),String> {
+pub async fn evaluate_single_comment_sem(comment: &Comment, app_state: Arc<RwLock<AppState>>) -> Result<(),String> {
     let id = comment.id;
     let comment = comment.clone();
     let app_state = app_state.clone();
@@ -685,6 +700,11 @@ impl eframe::App for App {
                                 if ui.button("Nuke Evaluations").clicked() {
                                     state.evaluations = HashMap::new();
                                 }
+                                if ui.button("Export State").clicked() {
+                                    if let Ok(json_str) = serde_json::to_string(&state.clone()) {
+                                        let _ = std::fs::write("state.json", json_str);
+                                    }
+                                }
                             },
                         );
 
@@ -708,6 +728,13 @@ impl eframe::App for App {
                                         );
                                     });
                             });
+
+                        ui.add_space(2.0);
+                        ui.with_layout(Layout::right_to_left(egui::Align::Max), |ui| {
+                            ui.text_edit_singleline(&mut state.search_string);
+                            ui.label("Search: ");
+                        });
+                        ui.add_space(5.0);
                     });
                 });
 

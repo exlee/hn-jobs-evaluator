@@ -5,6 +5,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::{comments::Comment, evaluation::Evaluation};
 
+#[derive(Serialize, Deserialize, Debug)]
+pub struct RunSpec {
+    pub hn_url: String,
+    pub pdf_path: String,
+    pub api_key: String,
+    pub requirements: String,
+}
+
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct EvaluationCache {
     pub key: String,
@@ -97,6 +105,7 @@ pub struct AppState {
     pub cache_key_error: Option<String>,
     pub flags: HashMap<u32, Flags>,
     pub hn_url: String,
+    pub search_string: String,
     pub requirements: String,
     pub pdf_path: Option<String>,
     pub api_key: String,

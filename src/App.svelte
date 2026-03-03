@@ -1,18 +1,42 @@
 <script>
   import { invoke } from '@tauri-apps/api/core';
+  import { listen } from '@tauri-apps/api/event';
   import { onMount } from 'svelte';
+
 
   let state = $state({
     hn_url: '', api_key: '', requirements: '', pdf_path: null,
     cache_key: null, processing: { enabled: false, total: 0, done: 0 },
     comments: [], evaluations: {}, sort_column: 'CreatedAt', descending: false
   });
+  let flags = $state({});
+  let rows = $state({});
+  let eval_count = 0;
+  async function refresh() {
+      state = await invoke('get_state');
+      rows = (await invoke('get_rows')).map(c => c.comment);
+      for (c of rows) {
+        await getFlags(c.id);
+      }
+      eval_count  = state.comments.filter((c) => state.evaluations[c.id]).length;
+  };
+  onMount(() => {
+    const unlisten = listen('refresh-rows', async (event) => {
 
+      console.log(event);
+    
+    });
+      return () => unlisten.then(f => f());
+  });
+  async function getFlags(commentId) {
+      if (flags[commentId] !== undefined) return;
+      flags[commentId] = await invoke('comment_flags', { commentId });
+  }
   // Poll for state updates (processing progress, new comments, evaluations)
   onMount(() => {
     const interval = setInterval(async () => {
-      state = await invoke('get_state');
-    }, 500);
+      await refresh();
+    }, 1000);
     return () => clearInterval(interval);
   });
   let saveTimer;
@@ -32,7 +56,7 @@
     state = await invoke('get_state');
   }
 
-  function sortedComments() {
+  function sortedComments2() {
     const sorted = [...state.comments].sort((a, b) => {
       let res = 0;
       if (state.sort_column === 'Score') {
@@ -46,6 +70,7 @@
       }
       return state.descending ? -res : res;
     });
+    console.log(sorted);
     return sorted;
   }
 </script>
@@ -62,18 +87,24 @@
       />
       <input
         placeholder="Gemini API Key"
+        type="password"
         bind:value={state.api_key}
         onchange={() => updateField('api_key', state.api_key)}
       />
       <div class="status">
         {#if state.pdf_path}<span>Selected: {state.pdf_path}</span>{/if}
-        <span>Cache key: {state.cache_key ? 'OK' : 'None'}</span>
+        <span>Cache key: {state.eval_cache ? 'OK' : 'None'}</span>
         {#if state.processing.enabled}
           <span>Processing: {state.processing.done}/{state.processing.total}</span>
         {:else}
           <span>Processing disabled</span>
         {/if}
       </div>
+
+      <div class="status">
+        <span>Count: {eval_count}/{state.comments.length}</span>
+      </div>
+      
       <div class="buttons">
         <button onclick={selectPdf}>Select PDF</button>
         <button onclick={() => invoke('get_evaluation_cache')}>Get Ev Cache</button>
@@ -95,22 +126,23 @@
     <table>
       <thead>
         <tr>
-          <th onclick={() => setSort('CreatedAt')} class="sortable">CreatedAt</th>
+          <th style="width: 11em;" onclick={() => setSort('CreatedAt')} class="sortable">CreatedAt</th>
           <th onclick={() => setSort('Id')} class="sortable">Comment</th>
           <th>Evaluation</th>
           <th>Tech Alignment</th>
           <th>Comp Alignment</th>
-          <th onclick={() => setSort('Score')} class="sortable">Score</th>
-          <th></th>
+          <th style="width: 5%;" onclick={() => setSort('Score')} class="sortable">Score</th>
+          <th style="width: 10%;"></th>
         </tr>
       </thead>
       <tbody>
-        {#each sortedComments() as comment (comment.id)}
+        {#each rows as comment (comment.id)}
           {@const eval_ = state.evaluations[comment.id]}
-          <tr>
+          {#await getFlags(comment.id) then _}
+            <tr class:seen={flags[comment.id].seen} class:in-progress={flags[comment.id].in_progress}>
             <td class="col-date">{comment.created_at}</td>
             <td class="col-comment">
-              <a href="https://news.ycombinator.com/item?id={comment.id}" target="_blank">
+              <a onclick={() => invoke("open_url", {url: "https://news.ycombinator.com/item?id="+comment.id})} href="https://news.ycombinator.com/item?id={comment.id}" target="_blank">
                 #{comment.id}
               </a>
               <div class="scrollable">{comment.text ?? ''}</div>
@@ -128,13 +160,41 @@
               {:else}-{/if}
             </td>
             <td class="col-score">{eval_?.score ?? '-'}</td>
-            <td>
+            <td class="control-buttons">
               <button
                 disabled={!state.cache_key}
                 onclick={() => invoke('evaluate_comment_cmd', { commentId: comment.id })}
               >Evaluate</button>
+              {#if flags[comment.id]?.hidden}
+                <button 
+                  onclick={() => invoke('comment_flag_hide', { commentId: comment.id, toggle: false})}
+                  >Unhide</button>
+              {:else}
+                <button 
+                  onclick={() => invoke('comment_flag_hide', { commentId: comment.id, toggle: true})}
+                  >Hide</button>
+              {/if}
+              {#if flags[comment.id]?.seen}
+                <button 
+                  onclick={() => invoke('comment_flag_seen', { commentId: comment.id, toggle: false})}
+                  >Not seen</button>
+              {:else}
+                <button 
+                  onclick={() => invoke('comment_flag_seen', { commentId: comment.id, toggle: true})}
+                  >Seen</button>
+              {/if}
+              {#if flags[comment.id]?.in_progress}
+                <button 
+                  onclick={() => invoke('comment_flag_in_progress', { commentId: comment.id, toggle: false})}
+                  >Not in progress</button>
+              {:else}
+                <button 
+                  onclick={() => invoke('comment_flag_in_progress', { commentId: comment.id, toggle: true})}
+                  >Set in progress</button>
+              {/if}
             </td>
           </tr>
+          {/await}
         {/each}
       </tbody>
     </table>
@@ -148,6 +208,7 @@
   .inputs { display: flex; flex-direction: column; gap: 0.5rem; min-width: 320px; }
   .buttons { display: flex; flex-wrap: wrap; gap: 0.4rem; }
   .status { display: flex; flex-direction: column; font-size: 0.85rem; gap: 0.2rem; }
+  .control-buttons button { width: 100%; margin-bottom: 10pt; }
   input, textarea { background: #333c43; border: 1px solid #495157; color: #d3c6aa; padding: 0.4rem; border-radius: 3px; }
   textarea { flex: 1; resize: vertical; }
   button { background: #3d4841; border: 1px solid #495157; color: #d3c6aa; padding: 0.3rem 0.6rem; border-radius: 3px; cursor: pointer; }
@@ -161,9 +222,15 @@
   th.sortable:hover { color: #a7c080; }
   td { padding: 0.5rem; border-bottom: 1px solid #3d4841; vertical-align: top; }
   tr:nth-child(even) { background: #333c43; }
-  .scrollable { max-height: 200px; overflow-y: auto; font-size: 0.85rem; line-height: 1.4; }
+  .scrollable { max-height: 200px; overflow-y: auto; font-size: 0.65rem; text-align: justify; line-height: 1.4; }
   .col-date { width: 10%; }
+  .in-progress { color: rgb(100,255,100); }
+  .seen { opacity: 0.2 }
   .col-comment { width: 37%; }
   .col-score { width: 4%; text-align: center; }
   a { color: #a7c080; font-size: 0.8rem; }
+  td a { font-size: 0.4rem; }
+  td { font-size: 0.65rem; }
+  :global(body) { background: #2d353b; margin: 0; }
+  input:focus, textarea:focus { outline: none; border-color: #a7c080; }
 </style>

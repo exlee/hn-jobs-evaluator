@@ -201,7 +201,7 @@ pub async fn evaluate_comment(
 
     result
 }
-static COMPRESSED_TOKENIZER: &[u8] = include_bytes!("../assets/tokenizer.json.zst");
+static COMPRESSED_TOKENIZER: &[u8] = include_bytes!("../../assets/tokenizer.json.zst");
 static TOKENIZER: OnceLock<Tokenizer> = OnceLock::new();
 pub fn estimate_accurate_tokens(text: &str) -> usize {
     let tok = TOKENIZER.get_or_init(|| get_tokenizer());
