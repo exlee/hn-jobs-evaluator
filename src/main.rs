@@ -4,6 +4,8 @@ use tokio;
 mod comments;
 mod evaluation;
 mod gui;
+mod common_gui;
+mod tauri_gui;
 
 #[derive(Serialize, Deserialize, Debug)]
 struct RunSpec {
@@ -13,10 +15,17 @@ struct RunSpec {
     pub requirements: String,
 }
 
+// #[tokio::main]
+// async fn main() -> eframe::Result {
+//     rustls::crypto::ring::default_provider()
+//         .install_default()
+//         .expect("Failed to install rustls crypto provider");
+//     gui::main()
+// }
 #[tokio::main]
-async fn main() -> eframe::Result {
+async fn main() {
     rustls::crypto::ring::default_provider()
         .install_default()
         .expect("Failed to install rustls crypto provider");
-    gui::main()
+    tauri_gui::run();
 }

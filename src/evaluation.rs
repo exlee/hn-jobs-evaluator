@@ -2,10 +2,12 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::sync::OnceLock;
+use std::time::Duration;
 use std::{fs, path::Path};
 use tokenizers::Tokenizer;
 
 use crate::comments::Comment;
+use crate::common_gui::EvaluationCache;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Evaluation {
@@ -25,7 +27,7 @@ pub struct EvalCache {
 
 pub async fn evaluate_comment_cached(
     comment: &Comment,
-    cache_name: &str, // Pass the name from Step 1
+    ev_cache: &EvaluationCache, // Pass the name from Step 1
     api_key: &str,
 ) -> anyhow::Result<Evaluation> {
     let client = reqwest::Client::new();
@@ -36,7 +38,7 @@ pub async fn evaluate_comment_cached(
     );
     // Notice: We only send the specific comment now.
     let payload = serde_json::json!({
-        "cached_content": cache_name,
+        "cached_content": ev_cache.key,
         "contents": [{
             "parts": [{
                 "text": prompt,
@@ -85,14 +87,16 @@ pub async fn create_evaluation_cache(
     api_key: &str,
     pdf_path: &Path,
     requirements: &str,
+    ttl: Duration,
 ) -> Result<String, String> {
+    let time_pad = 10;
     let client = reqwest::Client::new();
     let pdf_data = fs::read(pdf_path).unwrap();
 
     #[allow(deprecated)]
     let payload = serde_json::json!({
         "model": "models/gemini-3-flash-preview",
-        "ttl": "3600s", // 1 hour
+        "ttl": format!("{}s", ttl.as_secs() + time_pad), // 1 hour
         "contents": [
             {
                 "role": "user",

@@ -1,6 +1,7 @@
+use chrono::Utc;
 use parking_lot::RwLock;
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
-
+use std::{collections::HashMap, path::PathBuf, sync::Arc, time::{Duration, Instant}};
+use crate::common_gui::*;
 use eframe::egui::{self, Button, Color32, FontId, Layout, TextFormat, Widget, text::LayoutJob};
 use serde::{Deserialize, Serialize};
 
@@ -12,84 +13,7 @@ use crate::{
     },
 };
 
-#[derive(Serialize, Deserialize, Default, Clone)]
-enum SortColumn {
-    #[default]
-    CreatedAt,
-    Score,
-    Id,
-}
 
-#[derive(Serialize, Deserialize, Default, Clone)]
-struct ProcessingData {
-    enabled: bool,
-    total: usize,
-    error: usize,
-    done: usize,
-}
-
-#[derive(Default, Serialize, Deserialize, Clone, PartialEq, Eq)]
-struct Flags(u8);
-use paste::paste;
-macro_rules! bitset {
-    ($const:ident = $name:ident) => {
-        paste! {
-            pub fn [<set_ $name>](&mut self, value: bool) {
-                if value {
-                    self.0 |= Self::$const;
-                } else {
-                    self.0 &= !Self::$const;
-                }
-            }
-            pub fn [<get_ $name>](&self) -> bool {
-                (self.0 & Self::$const) != 0
-            }
-        }
-    };
-}
-impl Flags {
-    const HIDE: u8 = 1 << 0;
-    const SEEN: u8 = 1 << 1;
-    const IN_PROGRESS: u8 = 1 << 2;
-    bitset!(HIDE = hide);
-    bitset!(SEEN = seen);
-    bitset!(IN_PROGRESS = in_progress);
-}
-
-impl PartialOrd for Flags {
-    fn partial_cmp(&self, _other: &Self) -> Option<std::cmp::Ordering> {
-        if self.0 == Self::HIDE || self.0 == Self::SEEN {
-            Some(std::cmp::Ordering::Greater)
-        } else {
-            None
-        }
-    }
-}
-impl Ord for Flags {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        match self.partial_cmp(other) {
-            None => std::cmp::Ordering::Equal,
-            Some(v) => v,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Default, Clone)]
-#[serde(default)]
-struct AppState {
-    processing: ProcessingData,
-    cache_key: Option<String>,
-    cache_key_error: Option<String>,
-    flags: HashMap<u32, Flags>,
-    hn_url: String,
-    requirements: String,
-    pdf_path: Option<String>,
-    api_key: String,
-    comments: Vec<Comment>,
-    evaluations: std::collections::HashMap<u32, Evaluation>,
-    sort_column: SortColumn,
-    descending: bool,
-}
 
 struct App {
     state: Arc<RwLock<AppState>>,
@@ -120,14 +44,27 @@ fn batch_process(comments: &[Comment], state: Arc<RwLock<AppState>>) -> Result<(
             let sem = Arc::clone(&semaphore);
             let state_c = state.clone();
             let handle = tokio::spawn(async move {
-                let _permit = sem.acquire().await.unwrap();
-                if !state_c.read().processing.enabled {
-                    return;
+                for _ in 0..3 {
+                    let _permit = sem.acquire().await.unwrap();
+                    if !state_c.read().processing.enabled {
+                        return;
+                    }
+                    if state_c.read().evaluations.contains_key(&comment.id) {
+                        return;
+                    };
+                    let ev_result =  evaluate_single_comment_sem(&comment, state_c.clone()).await;
+                    let mut state_w = state_c.write();
+                    match ev_result {
+                        Ok(_) => {
+                            state_w.processing.done += 1;
+                            return;
+                        },
+                        Err(_) => {
+                            continue; 
+                        },
+                    };
                 }
-                if state_c.read().evaluations.contains_key(&comment.id) {
-                    return;
-                };
-                evaluate_single_comment_sem(&comment, state_c.clone()).await;
+                state_c.write().processing.error += 1;
             });
             handles.push(handle);
         }
@@ -143,7 +80,7 @@ fn get_evaluation_cache(state: Arc<RwLock<AppState>>) {
     tokio::spawn(async move {
         {
             let mut state_w = state.write();
-            state_w.cache_key = None;
+            state_w.eval_cache = None;
             state_w.cache_key_error = None;
         }
         let (api_key, pdf_path, requirements) = {
@@ -155,8 +92,16 @@ fn get_evaluation_cache(state: Arc<RwLock<AppState>>) {
                 state.requirements.clone(),
             )
         };
-        match create_evaluation_cache(&api_key, &pdf_path, &requirements).await {
-            Ok(cache_key) => state.write().cache_key = Some(cache_key),
+        let ttl = Duration::from_secs(3600);
+        match create_evaluation_cache(&api_key, &pdf_path, &requirements, ttl).await {
+            Ok(cache_key) => {
+                let ev_cache = EvaluationCache {
+                    key: cache_key,
+                    timestamp:  Utc::now(),
+                    ttl: ttl,
+                };
+                state.write().eval_cache = Some(ev_cache);
+            },
             Err(err) => state.write().cache_key_error = Some(err),
         }
     });
@@ -487,7 +432,7 @@ impl App {
                                     ui.spacing().interact_size.y,
                                 );
                                 let button = SizedButton::new(button_size, "Evaluate");
-                                let resp = ui.add_enabled(state.cache_key.is_some(), button);
+                                let resp = ui.add_enabled(state.eval_cache.is_usable(), button);
 
                                 if resp.clicked() {
                                     evaluate_single_comment(&comment.clone(), self.state.clone());
@@ -567,16 +512,16 @@ fn evaluate_single_comment_live(comment: &Comment, app_state: Arc<RwLock<AppStat
     });
 }
 
-async fn evaluate_single_comment_sem(comment: &Comment, app_state: Arc<RwLock<AppState>>) {
+async fn evaluate_single_comment_sem(comment: &Comment, app_state: Arc<RwLock<AppState>>) -> Result<(),String> {
     let id = comment.id;
     let comment = comment.clone();
     let app_state = app_state.clone();
     let (cache_key, api_key) = {
         let state = app_state.read();
         let api_key = state.api_key.clone();
-        let Some(cache_key) = state.cache_key.clone() else {
+        let Some(cache_key) = state.eval_cache.clone() else {
             eprintln!("Missing Cache Evaluation Key");
-            return;
+            return Err(String::from("Missing cache evaluation key"));
         };
         (cache_key, api_key)
     };
@@ -586,10 +531,11 @@ async fn evaluate_single_comment_sem(comment: &Comment, app_state: Arc<RwLock<Ap
         match eval {
             Ok(e) => {
                 state_w.evaluations.insert(id, e);
-                state_w.processing.done += 1;
+                Ok(())
             }
-            Err(_) => {
-                state_w.processing.error += 1;
+            Err(err) => {
+                Err(err.to_string())
+
             }
         }
     }
@@ -602,7 +548,7 @@ fn evaluate_single_comment(comment: &Comment, app_state: Arc<RwLock<AppState>>) 
         let (cache_key, api_key) = {
             let state = app_state.read();
             let api_key = state.api_key.clone();
-            let Some(cache_key) = state.cache_key.clone() else {
+            let Some(cache_key) = state.eval_cache.clone() else {
                 eprintln!("Missing Cache Evaluation Key");
                 return;
             };
@@ -662,8 +608,10 @@ impl eframe::App for App {
                             ui.label(format!("PDF Missing"));
                         }
 
-                        if state.cache_key.is_some() {
+                        if state.eval_cache.is_usable() {
                             ui.label("Cache key: OK");
+                        } else if state.eval_cache.is_some() {
+                            ui.label("Cache key: Expired");
                         } else {
                             match &state.cache_key_error {
                                 Some(err) => ui.label(
