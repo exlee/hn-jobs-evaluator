@@ -1,49 +1,43 @@
-# HN's "Who is Hiring" Evaluator (Gemini only)
+# HN "Who is Hiring" Evaluator (Gemini only)
+
+Scanning the monthly HN hiring thread is tedious. This tool fetches all top-level comments, runs each one against your resume and requirements through Gemini, and scores them — so you read the 5 worth reading, not the 500.
 
 ![](./assets/screenshot.png)
 
-TL;DR; pass your preferences and your resume and get Gemini evaluate each "Who is Hiring" top comment.
+## Installation
 
-## Installation/Run
-
-Recommended (some extra info printed to console):
-
-```
+```bash
 git clone https://github.com/exlee/hn-jobs-evaluator
 cd hn-jobs-evaluator
 cargo run
 ```
 
-Or download binaries from [Releases](https://github.com/exlee/hn-jobs-evaluator/releases) page.
-
-
+Or grab a binary from the [Releases](https://github.com/exlee/hn-jobs-evaluator/releases) page.
 
 ## Usage
 
 ![](./assets/guide.png)
 
-1. Put "Who is Hiring" url  and Google's Gemini API Key
-2. Press "Process Comments"  - it will download and cache comments ("force" button will drop cache)
-3. Add PDF with Resume
-4. Write your requirements (Important - resume and requirements need to have at least 1024 tokens in total)
-5. Get Evaluation Cache 
-6. Click Batch Process to start processing comments in bulk, or press "Evaluate" button next to each comment
+1. Paste the "Who is Hiring" thread URL and your Gemini API key
+2. Click **Process Comments** to fetch and cache the thread
+3. Add your resume as PDF
+4. Write your requirements (compensation, stack, location — be specific)
+5. Click **Get Ev Cache** to upload context to Gemini
+6. Click **Batch Process** to evaluate all comments, or **Evaluate** per row
 
-## Alpha Notices
+## Known Limitations
 
-- It's a one-day-app so not quite polished
-- Only works with Google's Gemini 3 Flash Preview
-- ⚠️ **Cache Key expires after an hour and need to be regenerated - not indicated in UI** 
-- Getting cache takes ~10s, there's no indicator about progress
-- Getting evaluation takes ~10s, there's no indicator
-- Comments and evaluation cache json files are polluting CWD
-- Evaluation might fail because Gemini produces garbage, so don't expect Batch Process counter to fetch all in one try
-- ⚠️ **Process Batch button is togglable, meaning that restarting process take 2 clicks**
-- Requirements should include Compensation expectations as well as desired Tech stack - otherwise "intelligence" will fail
-- ⚠️ Cache needs 1024 tokens in total (PDF) to be created
+- ⚠️ **Cost:** Evaluating a full monthly thread ran ~$40. Gemini Flash is the cheapest available option; costs scale with thread size and resume length.
+- ⚠️ **Cache key expires after ~1 hour** — regenerate with "Get Ev Cache" if evaluations stop working
+- ⚠️ **Batch Process is a toggle** — if you need to restart, click it twice
+- ⚠️ **Resume + requirements must total at least 1024 tokens** — required by Gemini's caching API
+- Gemini occasionally returns malformed output — Batch Process may not complete in one pass, just run it again
+- No progress indicators yet; cache and evaluation both take ~10s
+- Cache files are written to the working directory
+- Only Gemini Flash is supported currently
 
-## Extra info
-- Application saves the state in app's storage 
-- Evaluation is attached to Comment ID so comments can be safely refreshed without losing evaluation data
-- Requirements section is plain form, demo version is generated from LLM but feel free to write what you're searching for in plain text, just keeping in mind that along with PDF data should have 1024 tokens at least (for cache reasons)
-- Score is on scale 0-100
+## Notes
+
+- State is persisted across sessions
+- Evaluations are keyed to comment ID — safe to re-fetch the thread without losing results
+- Scores are 0–100; each row shows Evaluation, Tech Alignment, and Comp Alignment separately

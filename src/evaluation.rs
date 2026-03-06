@@ -27,7 +27,7 @@ pub struct EvalCache {
 
 pub async fn evaluate_comment_cached(
     comment: &Comment,
-    ev_cache: &EvaluationCache, // Pass the name from Step 1
+    ev_cache: &EvaluationCache,
     api_key: &str,
 ) -> anyhow::Result<Evaluation> {
     let client = reqwest::Client::new();
@@ -36,7 +36,6 @@ pub async fn evaluate_comment_cached(
         "Comment: {}\n\nEvaluate alignment. Be concise (max 3 sentences) for the evaluation field. Return JSON: {{'evaluation': string, 'technology_alignment': string, 'compensation_alignment': string, 'score': 0-100}}",
         comment.text.as_deref().unwrap_or("")
     );
-    // Notice: We only send the specific comment now.
     let payload = serde_json::json!({
         "cached_content": ev_cache.key,
         "contents": [{
@@ -46,6 +45,10 @@ pub async fn evaluate_comment_cached(
         }],
         "generationConfig": {
             "response_mime_type": "application/json",
+            "maxOutputTokens": 512,
+            "thinkingConfig": {
+                "thinkingBudget": 0
+            },
             "response_schema": {
                 "type": "object",
                 "properties": {
@@ -128,7 +131,6 @@ pub async fn create_evaluation_cache(
     if let Some(Some(error_msg)) = res.get("error").map(|e| e.get("message")) {
         return Err(error_msg.to_string());
     } else {
-        // Returns the cache name, e.g., "cachedContents/12345abcde"
         Ok(res["name"].as_str().unwrap().to_string())
     }
 }
@@ -201,7 +203,7 @@ pub async fn evaluate_comment(
 
     result
 }
-static COMPRESSED_TOKENIZER: &[u8] = include_bytes!("../../assets/tokenizer.json.zst");
+static COMPRESSED_TOKENIZER: &[u8] = include_bytes!("../assets/tokenizer.json.zst");
 static TOKENIZER: OnceLock<Tokenizer> = OnceLock::new();
 pub fn estimate_accurate_tokens(text: &str) -> usize {
     let tok = TOKENIZER.get_or_init(|| get_tokenizer());
