@@ -1,9 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::{
-    fs,
-    time::Duration,
-};
+use std::{fs, time::Duration};
 use url::Url;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -45,6 +42,13 @@ pub async fn get_comments(item_id: u32, force: bool) -> Vec<Comment> {
     flatten_comments(&response["children"], item_id, &mut comments);
 
     fs::write(cache_path, serde_json::to_string(&comments).unwrap()).unwrap();
+    comments
+}
+pub async fn get_comments_from_url(url: &str, force: bool) -> Vec<Comment> {
+    let item_id = parse_item_id(&url);
+    let comments = get_comments(item_id, force).await;
+    let comments = filter_top_level(&comments, item_id);
+    let comments: Vec<Comment> = comments.into_iter().cloned().collect();
     comments
 }
 

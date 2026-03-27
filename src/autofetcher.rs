@@ -15,10 +15,9 @@ impl AutoFetcher {
         if self.handle.is_some() {
             return;
         }
-        let id = comments::parse_item_id(&url);
         let join = tokio::task::spawn(async move {
             loop {
-                let comments = comments::get_comments(id, true).await;
+                let comments = comments::get_comments_from_url(&url, true).await;
                 let _ = tx.send(comments).await;
                 let _ = tokio::time::sleep(Duration::from_secs(60)).await;
             }

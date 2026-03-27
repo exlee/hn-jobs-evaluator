@@ -6,6 +6,8 @@ use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::autofetcher::AutoFetcher;
 use crate::comments;
+use crate::job_description::{JobDescription, JobDescriptions};
+use crate::notify::NotifyData;
 use crate::{comments::Comment, evaluation::Evaluation};
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -107,6 +109,7 @@ pub struct ProcessingData {
 #[derive(Serialize, Deserialize, Default, Clone)]
 #[serde(default)]
 pub struct AppState {
+    pub notify_data: NotifyData,
     pub processing: ProcessingData,
     pub eval_cache: Option<EvaluationCache>,
     pub cache_key_error: Option<String>,
@@ -125,4 +128,5 @@ pub struct AppState {
     pub hide_in_progress: bool,
     pub auto_fetch: bool,
     pub auto_fetcher: AutoFetcher,
+    pub job_descriptions: JobDescriptions,
 }

@@ -1,13 +1,15 @@
 use anyhow::Context;
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::io::Read;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use std::{fs, path::Path};
 use tokenizers::Tokenizer;
 
 use crate::comments::Comment;
-use crate::common_gui::EvaluationCache;
+use crate::common_gui::{AppState, EvaluationCache};
+use crate::job_description::JobDescription;
 
 const MODEL: &str = "gemini-3.1-flash-lite-preview";
 
@@ -17,6 +19,12 @@ pub struct Evaluation {
     pub technology_alignment: String,
     pub compensation_alignment: String,
     pub score: u32,
+    pub job_description: Option<JobDescription>,
+}
+impl Evaluation {
+    pub fn update_job_description(&mut self, jd: JobDescription) {
+        self.job_description = Some(jd);
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -74,6 +82,7 @@ pub async fn evaluate_comment_cached(
     let res: serde_json::Value = client
         .post(url)
         .json(&payload)
+        .timeout(std::time::Duration::from_secs(15))
         .send()
         .await
         .context("Send failure")?
@@ -249,7 +258,6 @@ fn get_tokenizer() -> Tokenizer {
     // Load tokenizer from the JSON buffer in memory
     Tokenizer::from_bytes(json_bytes).expect("Failed to load tokenizer")
 }
-
 #[cfg(all(test, feature = "integration-tests"))]
 mod tests {
     use chrono::{DateTime, NaiveDateTime};

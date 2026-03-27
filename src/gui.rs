@@ -1,4 +1,4 @@
-use crate::{autofetcher, common_gui::*};
+use crate::{appstate_evaluation, autofetcher, common_gui::*, notify};
 use chrono::Utc;
 use eframe::egui::{self, Button, Color32, FontId, Layout, TextFormat, Widget, text::LayoutJob};
 use parking_lot::RwLock;
@@ -60,7 +60,9 @@ fn batch_process(comments: &[Comment], state: Arc<RwLock<AppState>>) -> Result<(
                     if state_c.read().evaluations.contains_key(&comment.id) {
                         return;
                     };
-                    let ev_result = evaluate_single_comment_sem(&comment, state_c.clone()).await;
+                    let ev_result =
+                        appstate_evaluation::evaluate_single_comment(&comment, state_c.clone())
+                            .await;
                     let mut state_w = state_c.write();
                     match ev_result {
                         Ok(_) => {
@@ -122,10 +124,7 @@ fn process_comments(state: Arc<RwLock<AppState>>, force: bool) {
             state.comments = vec![];
         }
         let hn_url = state.read().hn_url.clone();
-        let item_id = comments::parse_item_id(&hn_url);
-        let comments = comments::get_comments(item_id, force).await;
-        let top_level = comments::filter_top_level(&comments, item_id);
-        let top_level: Vec<Comment> = top_level.into_iter().cloned().collect();
+        let top_level = comments::get_comments_from_url(&hn_url, force).await;
 
         let mut state_w = state.write();
         state_w.comments = top_level.into_iter().map(|t| t.clone()).collect();
@@ -500,7 +499,14 @@ impl App {
                                 let resp = ui.add_enabled(state.eval_cache.is_usable(), button);
 
                                 if resp.clicked() {
-                                    evaluate_single_comment(&comment.clone(), self.state.clone());
+                                    let handle = self.state.clone();
+                                    let comment = comment.clone();
+                                    tokio::task::spawn(async move {
+                                        let _ = appstate_evaluation::evaluate_single_comment(
+                                            &comment, handle,
+                                        )
+                                        .await;
+                                    });
                                 };
                                 let mut flags =
                                     state.flags.get(&comment.id).cloned().unwrap_or_default();
@@ -546,6 +552,15 @@ impl App {
                                         state.flags.insert(comment.id.clone(), flags.clone());
                                     }
                                 }
+
+                                if state.notify_data.notified(comment.id) {
+                                    let reset_notify_button =
+                                        SizedButton::new(button_size, "Remove Notify");
+                                    let resp = ui.add(reset_notify_button);
+                                    if resp.clicked() {
+                                        state.notify_data.remove(comment.id);
+                                    }
+                                }
                             });
 
                             ui.end_row();
@@ -555,85 +570,6 @@ impl App {
     }
 }
 
-#[allow(unused)]
-fn evaluate_single_comment_live(comment: &Comment, app_state: Arc<RwLock<AppState>>) {
-    let id = comment.id;
-    let comment = comment.clone();
-    let app_state = app_state.clone();
-    tokio::spawn(async move {
-        let (requirements, api_key, pathbuf) = {
-            let state = app_state.read();
-            let Some(pdf_path) = state.pdf_path.clone() else {
-                eprintln!("Missing PDF Path");
-                return;
-            };
-            let requirements = state.requirements.clone();
-            let api_key = state.api_key.clone();
-            let pathbuf = PathBuf::from(pdf_path);
-            (requirements, api_key, pathbuf)
-        };
-        let eval = evaluate_comment(&comment, Some(&pathbuf), &requirements, &api_key).await;
-        app_state.write().evaluations.insert(id, eval);
-    });
-}
-
-pub async fn evaluate_single_comment_sem(
-    comment: &Comment,
-    app_state: Arc<RwLock<AppState>>,
-) -> Result<(), String> {
-    let id = comment.id;
-    let comment = comment.clone();
-    let app_state = app_state.clone();
-    let (cache_key, api_key) = {
-        let state = app_state.read();
-        let api_key = state.api_key.clone();
-        let Some(cache_key) = state.eval_cache.clone() else {
-            eprintln!("Missing Cache Evaluation Key");
-            return Err(String::from("Missing cache evaluation key"));
-        };
-        (cache_key, api_key)
-    };
-    let eval = evaluate_comment_cached(&comment, &cache_key, &api_key).await;
-    {
-        let mut state_w = app_state.write();
-        match eval {
-            Ok(e) => {
-                state_w.evaluations.insert(id, e);
-                Ok(())
-            }
-            Err(err) => Err(err.to_string()),
-        }
-    }
-}
-fn evaluate_single_comment(comment: &Comment, app_state: Arc<RwLock<AppState>>) {
-    let id = comment.id;
-    let comment = comment.clone();
-    let app_state = app_state.clone();
-    tokio::spawn(async move {
-        let (cache_key, api_key) = {
-            let state = app_state.read();
-            let api_key = state.api_key.clone();
-            let Some(cache_key) = state.eval_cache.clone() else {
-                eprintln!("Missing Cache Evaluation Key");
-                return;
-            };
-            (cache_key, api_key)
-        };
-        let eval = evaluate_comment_cached(&comment, &cache_key, &api_key).await;
-        {
-            let mut state_w = app_state.write();
-            match eval {
-                Ok(e) => {
-                    state_w.evaluations.insert(id, e);
-                    state_w.processing.done += 1;
-                }
-                Err(_) => {
-                    state_w.processing.error += 1;
-                }
-            }
-        }
-    });
-}
 impl eframe::App for App {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         let state: AppState = self.state.read().clone();
@@ -726,6 +662,7 @@ impl eframe::App for App {
                         } else {
                             ui.label("Processing stopped");
                         }
+                        ui.label(format!("NTFY topic: {}", state.notify_data.topic));
                         let mut evaluated = 0;
                         for c in state.comments.iter() {
                             if state.evaluations.contains_key(&c.id) {

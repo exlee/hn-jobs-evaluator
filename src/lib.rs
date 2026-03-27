@@ -1,6 +1,8 @@
+pub mod appstate_evaluation;
 pub mod comments;
 pub mod evaluation;
 //pub mod gui;
 pub mod autofetcher;
 pub mod common_gui;
 pub mod job_description;
+pub mod notify;
