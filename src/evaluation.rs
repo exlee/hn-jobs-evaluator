@@ -14,7 +14,7 @@ pub struct Evaluation {
     pub evaluation: String,
     pub technology_alignment: String,
     pub compensation_alignment: String,
-    pub score: u8,
+    pub score: u32,
 }
 
 #[derive(Serialize, Deserialize, Debug)]

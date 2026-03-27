@@ -1,9 +1,14 @@
-use chrono::Utc;
-use parking_lot::RwLock;
-use std::{collections::HashMap, path::PathBuf, sync::Arc, time::{Duration, Instant}};
 use crate::common_gui::*;
+use chrono::Utc;
 use eframe::egui::{self, Button, Color32, FontId, Layout, TextFormat, Widget, text::LayoutJob};
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use crate::{
     comments::{self, Comment},
@@ -12,8 +17,6 @@ use crate::{
         evaluate_comment_cached,
     },
 };
-
-
 
 struct App {
     state: Arc<RwLock<AppState>>,
@@ -52,16 +55,16 @@ fn batch_process(comments: &[Comment], state: Arc<RwLock<AppState>>) -> Result<(
                     if state_c.read().evaluations.contains_key(&comment.id) {
                         return;
                     };
-                    let ev_result =  evaluate_single_comment_sem(&comment, state_c.clone()).await;
+                    let ev_result = evaluate_single_comment_sem(&comment, state_c.clone()).await;
                     let mut state_w = state_c.write();
                     match ev_result {
                         Ok(_) => {
                             state_w.processing.done += 1;
                             return;
-                        },
+                        }
                         Err(_) => {
-                            continue; 
-                        },
+                            continue;
+                        }
                     };
                 }
                 state_c.write().processing.error += 1;
@@ -97,11 +100,11 @@ fn get_evaluation_cache(state: Arc<RwLock<AppState>>) {
             Ok(cache_key) => {
                 let ev_cache = EvaluationCache {
                     key: cache_key,
-                    timestamp:  Utc::now(),
+                    timestamp: Utc::now(),
                     ttl: ttl,
                 };
                 state.write().eval_cache = Some(ev_cache);
-            },
+            }
             Err(err) => state.write().cache_key_error = Some(err),
         }
     });
@@ -163,7 +166,7 @@ impl TableCell for egui::Ui {
         let cell_size = egui::vec2(avw * cols[col_number], 200.0);
         self.allocate_ui_with_layout(
             cell_size,
-            egui::Layout::top_down(egui::Align::Min).with_main_justify(false),
+            egui::Layout::top_down(egui::Align::Min).with_cross_justify(true),
             fun,
         );
     }
@@ -237,7 +240,7 @@ impl App {
         Self { state }
     }
 
-    fn render_table(&mut self, ui: &mut egui::Ui) {
+    fn render_table(&mut self, ui: &mut egui::Ui, available_w: f32) {
         let mut state = self.state.write();
         let indices: Vec<usize> = (0..state.comments.len()).collect();
         let mut indices: Vec<usize> = indices
@@ -248,14 +251,43 @@ impl App {
                 }
                 let mut matches = false;
                 let comment = state.comments[*i].clone();
-                if let Some(evaluation) = state.evaluations.get(&comment.id) {
-                }
-                if let Some(t) = comment.text 
-                    && t.contains(&state.search_string) {
-                        matches = true;
+                //if let Some(evaluation) = state.evaluations.get(&comment.id) {}
+                if let Some(t) = comment.text
+                    && t.contains(&state.search_string)
+                {
+                    matches = true;
                 }
                 matches
-
+            })
+            .filter(|i| {
+                if state.min_score == 0 {
+                    return true;
+                }
+                let comment = state.comments[*i].clone();
+                let Some(evaluation) = state.evaluations.get(&comment.id) else {
+                    return false;
+                };
+                evaluation.score >= state.min_score
+            })
+            .filter(|i| {
+                if !state.hide_seen {
+                    return true;
+                }
+                let comment = state.comments[*i].clone();
+                let Some(flags) = state.flags.get(&comment.id) else {
+                    return true;
+                };
+                if flags.get_seen() { false } else { true }
+            })
+            .filter(|i| {
+                if !state.hide_in_progress {
+                    return true;
+                }
+                let comment = state.comments[*i].clone();
+                let Some(flags) = state.flags.get(&comment.id) else {
+                    return true;
+                };
+                if flags.get_in_progress() { false } else { true }
             })
             .filter(|i| {
                 let comment_id = state.comments[*i].id;
@@ -298,8 +330,13 @@ impl App {
         // });
 
         let cols = vec![0.1, 0.375, 0.125, 0.125, 0.125, 0.03, 0.12];
-        let available_w = ui.available_width();
-        egui::Grid::new("header")
+        //let available_w = ui.available_width();
+        let num_cols = cols.len();
+        let spacing = ui.spacing().item_spacing.x;
+        let available_w = ui.max_rect().width() - spacing * (cols.len() - 1) as f32;
+
+        //let available_w = ui.clip_rect().width();
+        let r = egui::Grid::new("header")
             .num_columns(cols.len())
             .striped(true)
             .show(ui, |ui| {
@@ -337,17 +374,20 @@ impl App {
                 });
 
                 ui.table_cell_h(&cols, available_w, 6, |ui| {
-                    ui.label("");
+                    ui.label(" ");
                 });
 
                 ui.end_row();
             });
+
         ui.separator();
+
+        let available_w = ui.max_rect().width() - spacing * (cols.len() - 1) as f32;
         egui::ScrollArea::vertical()
             .hscroll(false) // CRITICAL: Forces grid to fit window width
             .auto_shrink([false; 2]) // Prevents the area from collapsing if empty
             .show_rows(ui, 200.0, indices.len(), |ui, row_range| {
-                egui::Grid::new("body")
+                let r = egui::Grid::new("body")
                     .num_columns(cols.len())
                     .min_row_height(200.0)
                     .striped(true)
@@ -527,7 +567,10 @@ fn evaluate_single_comment_live(comment: &Comment, app_state: Arc<RwLock<AppStat
     });
 }
 
-pub async fn evaluate_single_comment_sem(comment: &Comment, app_state: Arc<RwLock<AppState>>) -> Result<(),String> {
+pub async fn evaluate_single_comment_sem(
+    comment: &Comment,
+    app_state: Arc<RwLock<AppState>>,
+) -> Result<(), String> {
     let id = comment.id;
     let comment = comment.clone();
     let app_state = app_state.clone();
@@ -548,10 +591,7 @@ pub async fn evaluate_single_comment_sem(comment: &Comment, app_state: Arc<RwLoc
                 state_w.evaluations.insert(id, e);
                 Ok(())
             }
-            Err(err) => {
-                Err(err.to_string())
-
-            }
+            Err(err) => Err(err.to_string()),
         }
     }
 }
@@ -592,6 +632,7 @@ impl eframe::App for App {
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
+            let total_width = ui.available_width();
             ui.vertical(|ui| {
                 ui.vertical_centered(|ui| {
                     ui.heading("HN \"Who is Hiring\" Evaluator");
@@ -733,12 +774,20 @@ impl eframe::App for App {
                         ui.with_layout(Layout::right_to_left(egui::Align::Max), |ui| {
                             ui.text_edit_singleline(&mut state.search_string);
                             ui.label("Search: ");
+                            ui.add_space(10.0);
+                            let slider = egui::Slider::new(&mut state.min_score, 0..=100);
+                            ui.add(slider);
+                            ui.label("Min score: ");
+                            ui.add_space(10.0);
+                            ui.toggle_value(&mut state.hide_seen, "Hide seen");
+                            ui.add_space(5.0);
+                            ui.toggle_value(&mut state.hide_in_progress, "Hide in-progress");
                         });
                         ui.add_space(5.0);
                     });
                 });
 
-                self.render_table(ui);
+                self.render_table(ui, total_width);
             });
         });
     }

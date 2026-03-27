@@ -3,3 +3,4 @@ node_modules
 *.json
 run_spec.toml
 *.pdf
+.DS_Store

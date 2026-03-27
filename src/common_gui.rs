@@ -87,7 +87,12 @@ impl Usable for EvaluationCache {
     }
 }
 #[derive(Serialize, Deserialize, Default, Clone)]
-pub enum SortColumn { #[default] CreatedAt, Score, Id }
+pub enum SortColumn {
+    #[default]
+    CreatedAt,
+    Score,
+    Id,
+}
 
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct ProcessingData {
@@ -97,7 +102,6 @@ pub struct ProcessingData {
     pub done: usize,
 }
 #[derive(Serialize, Deserialize, Default, Clone)]
-
 #[serde(default)]
 pub struct AppState {
     pub processing: ProcessingData,
@@ -113,4 +117,7 @@ pub struct AppState {
     pub evaluations: std::collections::HashMap<u32, Evaluation>,
     pub sort_column: SortColumn,
     pub descending: bool,
+    pub min_score: u32,
+    pub hide_seen: bool,
+    pub hide_in_progress: bool,
 }
