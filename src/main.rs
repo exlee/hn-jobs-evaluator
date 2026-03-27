@@ -1,11 +1,11 @@
 use serde::{Deserialize, Serialize};
 use tokio;
 
+mod autofetcher;
 mod comments;
+mod common_gui;
 mod evaluation;
 mod gui;
-mod common_gui;
-
 
 #[tokio::main]
 async fn main() -> eframe::Result {

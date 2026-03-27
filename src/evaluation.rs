@@ -9,6 +9,8 @@ use tokenizers::Tokenizer;
 use crate::comments::Comment;
 use crate::common_gui::EvaluationCache;
 
+const MODEL: &str = "gemini-3.1-flash-lite-preview";
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Evaluation {
     pub evaluation: String,
@@ -62,7 +64,10 @@ pub async fn evaluate_comment_cached(
     });
 
     let url = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key={}",
+        "{}{}{}{}",
+        "https://generativelanguage.googleapis.com/v1beta/models/",
+        MODEL,
+        ":generateContent?key=",
         api_key
     );
 
@@ -98,7 +103,7 @@ pub async fn create_evaluation_cache(
 
     #[allow(deprecated)]
     let payload = serde_json::json!({
-        "model": "models/gemini-3-flash-preview",
+        "model": format!("models/{}",MODEL),
         "ttl": format!("{}s", ttl.as_secs() + time_pad), // 1 hour
         "contents": [
             {
@@ -128,6 +133,7 @@ pub async fn create_evaluation_cache(
         .unwrap();
 
     dbg!(&res);
+
     if let Some(Some(error_msg)) = res.get("error").map(|e| e.get("message")) {
         return Err(error_msg.to_string());
     } else {
@@ -137,12 +143,16 @@ pub async fn create_evaluation_cache(
 
 pub async fn evaluate_comment(
     comment: &Comment,
-    pdf_path: &Path,
+    pdf_path_opt: Option<&Path>,
     requirements: &str,
     api_key: &str,
 ) -> Evaluation {
-    let pdf_data = fs::read(pdf_path).unwrap();
-    let pdf_hash = format!("{:x}", md5::compute(&pdf_data));
+    let pdf_hash = if let Some(pdf_path) = pdf_path_opt {
+        let pdf_data = fs::read(pdf_path).unwrap();
+        format!("{:x}", md5::compute(&pdf_data))
+    } else {
+        String::from("nopdf")
+    };
     let req_hash = format!("{:x}", md5::compute(requirements));
     let cache_file = format!("eval_{}_{}.json", comment.id, pdf_hash);
 
@@ -161,32 +171,52 @@ pub async fn evaluate_comment(
     );
 
     #[allow(deprecated)]
-    let payload = serde_json::json!({
-        "contents": [
-            {
-                "parts": [
-                    { "inline_data": { "mime_type": "application/pdf", "data": base64::encode(pdf_data) } },
-                    { "text": prompt }
-                ]
+    let parts = if let Some(pdf_path) = pdf_path_opt {
+        let pdf_data = fs::read(pdf_path).unwrap();
+        serde_json::json!({
+                "inline_data": { "mime_type": "application/pdf", "data": base64::encode(pdf_data) } ,
+                "text": prompt
+        })
+    } else {
+        serde_json::json!({
+                 "text": prompt
+        })
+    };
+    #[allow(deprecated)]
+    let mut payload = serde_json::json!({
+        "generationConfig": {
+            "response_mime_type": "application/json",
+            "maxOutputTokens": 512,
+            "thinkingConfig": {
+                "thinkingBudget": 0
+            },
+            "response_schema": {
+                "type": "object",
+                "properties": {
+                    "evaluation": { "type": "string" },
+                    "technology_alignment": { "type": "string" },
+                    "compensation_alignment": { "type": "string" },
+                    "score": { "type": "integer" }
+                }
             }
-        ],
-        "generationConfig": { "response_mime_type": "application/json" }
+        }
     });
+    payload["contents"] = serde_json::json!({
+        "parts": [parts]
+    });
+    dbg!(&payload);
 
     let url = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key={}",
+        "{}{}{}{}",
+        "https://generativelanguage.googleapis.com/v1beta/models/",
+        MODEL,
+        ":generateContent?key=",
         api_key
     );
 
-    let res: serde_json::Value = client
-        .post(url)
-        .json(&payload)
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
+    let raw_res = client.post(url).json(&payload).send().await.unwrap();
+    dbg!(&raw_res);
+    let res: serde_json::Value = raw_res.json().await.unwrap();
     let raw_json = res["candidates"][0]["content"]["parts"][0]["text"]
         .as_str()
         .unwrap();
@@ -218,4 +248,43 @@ fn get_tokenizer() -> Tokenizer {
 
     // Load tokenizer from the JSON buffer in memory
     Tokenizer::from_bytes(json_bytes).expect("Failed to load tokenizer")
+}
+
+#[cfg(all(test, feature = "integration-tests"))]
+mod tests {
+    use chrono::{DateTime, NaiveDateTime};
+
+    use super::*;
+    use std::env;
+    use std::path::PathBuf;
+
+    #[tokio::test]
+    async fn test_evaluate_comment_integration() {
+        rustls::crypto::ring::default_provider()
+            .install_default()
+            .unwrap();
+
+        let api_key = env::var("TEST_GOOGLE_API_KEY")
+            .expect("TEST_GOOGLE_API_KEY must be set for integration tests");
+
+        let comment = Comment {
+            id: 123,
+            text: Some(
+                "I have 5 years of Rust experience and I am looking for competitive compensation."
+                    .to_string(),
+            ),
+            created_at: chrono::Utc::now(),
+            author: String::from("test_author"),
+            parent: 1,
+            children: Vec::new(),
+        };
+
+        let requirements = "Candidate must have Rust experience and salary expectation under 150k.";
+
+        let result = evaluate_comment(&comment, None, requirements, &api_key).await;
+
+        assert!(result.score <= 100);
+        assert!(!result.evaluation.is_empty());
+        println!("Result: {:?}", result);
+    }
 }

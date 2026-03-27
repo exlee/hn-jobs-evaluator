@@ -1,4 +1,4 @@
-use crate::common_gui::*;
+use crate::{autofetcher, common_gui::*};
 use chrono::Utc;
 use eframe::egui::{self, Button, Color32, FontId, Layout, TextFormat, Widget, text::LayoutJob};
 use parking_lot::RwLock;
@@ -8,6 +8,10 @@ use std::{
     path::PathBuf,
     sync::Arc,
     time::{Duration, Instant},
+};
+use tokio::sync::{
+    Semaphore,
+    mpsc::{Receiver, Sender},
 };
 
 use crate::{
@@ -20,9 +24,10 @@ use crate::{
 
 struct App {
     state: Arc<RwLock<AppState>>,
+    comments_tx: Sender<Vec<Comment>>,
+    comments_rx: Receiver<Vec<Comment>>,
 }
 
-use tokio::sync::Semaphore;
 fn batch_process(comments: &[Comment], state: Arc<RwLock<AppState>>) -> Result<(), String> {
     let mut comments = comments.to_vec();
     comments.sort_by_key(|c| c.created_at);
@@ -236,8 +241,13 @@ impl App {
             .unwrap_or_default();
 
         let state = Arc::new(RwLock::new(state_rwlock.clone()));
+        let (comments_tx, comments_rx) = tokio::sync::mpsc::channel(1);
 
-        Self { state }
+        Self {
+            state,
+            comments_tx,
+            comments_rx,
+        }
     }
 
     fn render_table(&mut self, ui: &mut egui::Ui, available_w: f32) {
@@ -562,7 +572,7 @@ fn evaluate_single_comment_live(comment: &Comment, app_state: Arc<RwLock<AppStat
             let pathbuf = PathBuf::from(pdf_path);
             (requirements, api_key, pathbuf)
         };
-        let eval = evaluate_comment(&comment, &pathbuf, &requirements, &api_key).await;
+        let eval = evaluate_comment(&comment, Some(&pathbuf), &requirements, &api_key).await;
         app_state.write().evaluations.insert(id, eval);
     });
 }
@@ -631,6 +641,8 @@ impl eframe::App for App {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        autofetcher::update_comments(&mut self.comments_rx, &mut self.state.write().comments);
+
         egui::CentralPanel::default().show(ctx, |ui| {
             let total_width = ui.available_width();
             ui.vertical(|ui| {
@@ -677,6 +689,18 @@ impl eframe::App for App {
 
                                 None => ui.label("Cache key: None"),
                             };
+                        }
+
+                        if ui
+                            .toggle_value(&mut state.auto_fetch, "Auto fetch")
+                            .changed()
+                        {
+                            if state.auto_fetch {
+                                let url = state.hn_url.clone();
+                                state.auto_fetcher.enable(url, self.comments_tx.clone());
+                            } else {
+                                state.auto_fetcher.disable();
+                            }
                         }
 
                         if state.processing.enabled {

@@ -2,7 +2,10 @@ use std::{collections::HashMap, time::Duration};
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc::{Receiver, Sender};
 
+use crate::autofetcher::AutoFetcher;
+use crate::comments;
 use crate::{comments::Comment, evaluation::Evaluation};
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -120,4 +123,6 @@ pub struct AppState {
     pub min_score: u32,
     pub hide_seen: bool,
     pub hide_in_progress: bool,
+    pub auto_fetch: bool,
+    pub auto_fetcher: AutoFetcher,
 }
