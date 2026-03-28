@@ -2,7 +2,6 @@ use std::{collections::HashMap, time::Duration};
 
 use llmuxer::{LlmConfig, ResponseShape};
 use serde::{Deserialize, Serialize};
-use tokio::task::spawn_blocking;
 
 const MODEL: &str = "gemini-3.1-flash-lite-preview";
 

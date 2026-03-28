@@ -1,14 +1,13 @@
 use anyhow::Context;
-use parking_lot::RwLock;
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::io::Read;
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 use std::time::Duration;
 use std::{fs, path::Path};
 use tokenizers::Tokenizer;
 
 use crate::comments::Comment;
-use crate::common_gui::{AppState, EvaluationCache};
 use crate::job_description::JobDescription;
 
 const MODEL: &str = "gemini-3.1-flash-lite-preview";
@@ -33,6 +32,34 @@ pub struct EvalCache {
     pub pdf_hash: String,
     pub req_hash: String,
     pub result: Evaluation,
+}
+#[derive(Serialize, Deserialize, Default, Clone, Debug)]
+pub struct EvaluationCache {
+    pub key: String,
+    pub timestamp: chrono::DateTime<Utc>,
+    pub ttl: Duration,
+}
+pub trait Usable {
+    fn is_usable(&self) -> bool;
+}
+impl Usable for Option<EvaluationCache> {
+    fn is_usable(&self) -> bool {
+        if self.is_none() {
+            return false;
+        }
+
+        self.as_ref().unwrap().is_usable()
+    }
+}
+impl Usable for EvaluationCache {
+    fn is_usable(&self) -> bool {
+        let td = Utc::now() - self.timestamp;
+        if td.num_seconds() > self.ttl.as_secs() as i64 {
+            false
+        } else {
+            true
+        }
+    }
 }
 
 pub async fn evaluate_comment_cached(
@@ -89,13 +116,10 @@ pub async fn evaluate_comment_cached(
         .json()
         .await
         .context("JSON unwrap failure")?;
-    dbg!(&res);
+    tracing::debug!("raw_response: {:?}", &res);
     let raw_json = res["candidates"][0]["content"]["parts"][0]["text"]
         .as_str()
         .context("Data unwrap error")?;
-
-    //let raw_json = raw_json.strip_prefix("```json").unwrap_or(raw_json);
-    //let raw_json = raw_json.strip_suffix("```").unwrap_or(raw_json);
 
     serde_json::from_str(raw_json).context("Deserialization error")
 }
@@ -260,11 +284,9 @@ fn get_tokenizer() -> Tokenizer {
 }
 #[cfg(all(test, feature = "integration-tests"))]
 mod tests {
-    use chrono::{DateTime, NaiveDateTime};
 
     use super::*;
     use std::env;
-    use std::path::PathBuf;
 
     #[tokio::test]
     async fn test_evaluate_comment_integration() {

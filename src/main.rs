@@ -1,4 +1,3 @@
-use serde::{Deserialize, Serialize};
 use tokio;
 use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
 use tracing_tree::HierarchicalLayer;
@@ -8,6 +7,7 @@ mod autofetcher;
 mod comments;
 mod common_gui;
 mod evaluation;
+mod events;
 mod gui;
 mod job_description;
 mod notify;

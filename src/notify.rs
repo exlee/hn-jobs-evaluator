@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{evaluation::Evaluation, job_description};
+use crate::evaluation::Evaluation;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct NotifyData {

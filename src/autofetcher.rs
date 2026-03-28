@@ -31,7 +31,7 @@ impl AutoFetcher {
     }
 }
 
-pub(crate) fn update_comments(
+pub fn update_comments(
     comments_rx: &mut tokio::sync::mpsc::Receiver<Vec<Comment>>,
     comments: &mut Vec<Comment>,
 ) {

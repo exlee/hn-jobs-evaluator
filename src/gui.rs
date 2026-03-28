@@ -1,14 +1,8 @@
-use crate::{appstate_evaluation, autofetcher, common_gui::*, notify};
+use crate::{appstate_evaluation, autofetcher, common_gui::*, evaluation};
 use chrono::Utc;
-use eframe::egui::{self, Button, Color32, FontId, Layout, TextFormat, Widget, text::LayoutJob};
+use eframe::egui::{self, Button, Color32, Layout, Widget};
 use parking_lot::RwLock;
-use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashMap,
-    path::PathBuf,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
 use tokio::sync::{
     Semaphore,
     mpsc::{Receiver, Sender},
@@ -16,10 +10,7 @@ use tokio::sync::{
 
 use crate::{
     comments::{self, Comment},
-    evaluation::{
-        Evaluation, create_evaluation_cache, estimate_accurate_tokens, evaluate_comment,
-        evaluate_comment_cached,
-    },
+    evaluation::{Usable, create_evaluation_cache, estimate_accurate_tokens},
 };
 
 struct App {
@@ -105,7 +96,7 @@ fn get_evaluation_cache(state: Arc<RwLock<AppState>>) {
         let ttl = Duration::from_hours(24);
         match create_evaluation_cache(&api_key, &pdf_path, &requirements, ttl).await {
             Ok(cache_key) => {
-                let ev_cache = EvaluationCache {
+                let ev_cache = evaluation::EvaluationCache {
                     key: cache_key,
                     timestamp: Utc::now(),
                     ttl: ttl,
@@ -249,7 +240,7 @@ impl App {
         }
     }
 
-    fn render_table(&mut self, ui: &mut egui::Ui, available_w: f32) {
+    fn render_table(&mut self, ui: &mut egui::Ui, _available_w: f32) {
         let mut state = self.state.write();
         let indices: Vec<usize> = (0..state.comments.len()).collect();
         let mut indices: Vec<usize> = indices
@@ -339,13 +330,11 @@ impl App {
         // });
 
         let cols = vec![0.1, 0.375, 0.125, 0.125, 0.125, 0.03, 0.12];
-        //let available_w = ui.available_width();
-        let num_cols = cols.len();
         let spacing = ui.spacing().item_spacing.x;
         let available_w = ui.max_rect().width() - spacing * (cols.len() - 1) as f32;
 
         //let available_w = ui.clip_rect().width();
-        let r = egui::Grid::new("header")
+        egui::Grid::new("header")
             .num_columns(cols.len())
             .striped(true)
             .show(ui, |ui| {
@@ -396,7 +385,7 @@ impl App {
             .hscroll(false) // CRITICAL: Forces grid to fit window width
             .auto_shrink([false; 2]) // Prevents the area from collapsing if empty
             .show_rows(ui, 200.0, indices.len(), |ui, row_range| {
-                let r = egui::Grid::new("body")
+                egui::Grid::new("body")
                     .num_columns(cols.len())
                     .min_row_height(200.0)
                     .striped(true)
