@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::{fs, time::Duration};
 use url::Url;
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(PartialEq, Eq, Serialize, Deserialize, Debug, Clone)]
 pub struct Comment {
     pub created_at: DateTime<Utc>,
     pub id: u32,

@@ -10,7 +10,7 @@ use tokenizers::Tokenizer;
 use crate::comments::Comment;
 use crate::job_description::JobDescription;
 
-const MODEL: &str = "gemini-3.1-flash-lite-preview";
+pub const MODEL: &str = "gemini-3.1-flash-lite-preview";
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Evaluation {

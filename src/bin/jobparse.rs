@@ -1,3 +1,5 @@
+use jobs::job_description;
+
 const MODEL: &str = "gemini-3.1-flash-lite-preview";
 fn main() {
     let api_key = std::env::var("GOOGLE_API_KEY").expect("GOOGLE_API_KEY must be set");
@@ -14,7 +16,7 @@ fn main() {
         panic!("Clipboard content must have at least 3 words");
     }
 
-    match app_core_lib::job_description::parse_job_description(llm_config, &input) {
+    match job_description::parse_job_description(llm_config, &input) {
         Ok(job) => {
             println!("Parsed Job Description:");
             println!("Company: {}", job.company_name);

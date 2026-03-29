@@ -3,6 +3,7 @@ pub mod comments;
 pub mod evaluation;
 //pub mod gui;
 pub mod autofetcher;
+pub mod batch_processor;
 pub mod common_gui;
 pub mod events;
 pub mod job_description;

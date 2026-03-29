@@ -1,0 +1,2 @@
+- [ ] Replace Strings with Arc<String> where applicable
+- [ ] Replace direct calls to API with Trait (to switch for testing)

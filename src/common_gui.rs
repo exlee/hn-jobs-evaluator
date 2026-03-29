@@ -16,7 +16,7 @@ pub struct RunSpec {
     pub requirements: String,
 }
 
-#[derive(Default, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Default, Serialize, Deserialize, Clone, PartialEq, Eq, Debug, Copy)]
 pub struct Flags(u8);
 use paste::paste;
 macro_rules! bitset {
@@ -79,27 +79,19 @@ pub struct ProcessingData {
 #[derive(Serialize, Deserialize, Default, Clone)]
 #[serde(default)]
 pub struct AppState {
-    pub notify_data: NotifyData,
-    pub processing: ProcessingData,
-    pub eval_cache: Option<evaluation::EvaluationCache>,
-    pub cache_key_error: Option<String>,
-    pub flags: HashMap<u32, Flags>,
     pub hn_url: String,
     pub search_string: String,
     pub requirements: String,
     pub pdf_path: Option<String>,
     pub api_key: String,
-    pub comments: Vec<Comment>,
-    pub evaluations: std::collections::HashMap<u32, Evaluation>,
     pub sort_column: SortColumn,
     pub descending: bool,
     pub min_score: u32,
     pub hide_seen: bool,
     pub hide_in_progress: bool,
     pub auto_fetch: bool,
-    pub auto_fetcher: AutoFetcher,
-    pub job_descriptions: JobDescriptions,
-    pub event_state: events::State,
+    pub batch_processing: bool,
+    pub notifications_enabled: bool,
 }
 
 // pub struct AppState {

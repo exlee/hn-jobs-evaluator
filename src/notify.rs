@@ -21,6 +21,10 @@ impl Default for NotifyData {
 }
 
 impl NotifyData {
+    #[tracing::instrument(skip(self))]
+    pub fn mark_notified(&mut self, comment_id: u32) {
+        self.notified_ids.insert(comment_id);
+    }
     #[tracing::instrument(skip(eval))]
     pub fn notify_evaluation(&mut self, comment_id: u32, eval: &Evaluation) -> anyhow::Result<()> {
         use anyhow::Context;

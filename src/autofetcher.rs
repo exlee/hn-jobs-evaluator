@@ -2,8 +2,12 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tokio::{sync::mpsc::Sender, task::AbortHandle};
+use tracing::Instrument as _;
 
-use crate::comments::{self, Comment};
+use crate::{
+    comments::{self, Comment},
+    events::{Event, EventEnvelope},
+};
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct AutoFetcher {
@@ -11,14 +15,21 @@ pub struct AutoFetcher {
     handle: Option<AbortHandle>,
 }
 impl AutoFetcher {
-    pub fn enable(&mut self, url: String, tx: Sender<Vec<Comment>>) {
+    pub fn enable(&mut self, url: String, tx: Sender<EventEnvelope>) {
         if self.handle.is_some() {
             return;
         }
         let join = tokio::task::spawn(async move {
             loop {
-                let comments = comments::get_comments_from_url(&url, true).await;
-                let _ = tx.send(comments).await;
+                let comments = comments::get_comments_from_url(&url, true)
+                    .instrument(tracing::info_span!("comments_update_loop"))
+                    .await;
+                let _ = tx
+                    .send(EventEnvelope {
+                        event: Event::CommentsUpdate { comments },
+                        span: tracing::info_span!("auto_fetch_comments"),
+                    })
+                    .await;
                 let _ = tokio::time::sleep(Duration::from_secs(60)).await;
             }
         });
@@ -28,15 +39,6 @@ impl AutoFetcher {
         if let Some(abort_handle) = self.handle.take() {
             abort_handle.abort();
         }
-    }
-}
-
-pub fn update_comments(
-    comments_rx: &mut tokio::sync::mpsc::Receiver<Vec<Comment>>,
-    comments: &mut Vec<Comment>,
-) {
-    if let Ok(new_comments) = comments_rx.try_recv() {
-        *comments = new_comments;
     }
 }
 
@@ -54,9 +56,11 @@ mod tests {
 
         fetcher.enable(url, tx);
 
-        if let Some(comments) = rx.recv().await {
-            assert!(!comments.is_empty());
-            assert!(comments.len() >= 1)
+        if let Some(envelope) = rx.recv().await {
+            if let crate::events::Event::CommentsUpdate { comments } = envelope.event {
+                assert!(!comments.is_empty());
+                assert!(comments.len() >= 1)
+            }
         }
 
         fetcher.disable();

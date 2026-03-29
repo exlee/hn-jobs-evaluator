@@ -1,80 +1,31 @@
-use crate::{appstate_evaluation, autofetcher, common_gui::*, evaluation};
+use crate::{
+    common_gui::*,
+    evaluation,
+    events::{self, Event, EventEnvelope},
+};
 use chrono::Utc;
 use eframe::egui::{self, Button, Color32, Layout, Widget};
 use parking_lot::RwLock;
-use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
-use tokio::sync::{
-    Semaphore,
-    mpsc::{Receiver, Sender},
-};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use crate::{
-    comments::{self, Comment},
+    comments::{self},
     evaluation::{Usable, create_evaluation_cache, estimate_accurate_tokens},
 };
 
 struct App {
+    event_handler: Arc<events::EventHandler>,
     state: Arc<RwLock<AppState>>,
-    comments_tx: Sender<Vec<Comment>>,
-    comments_rx: Receiver<Vec<Comment>>,
 }
 
-fn batch_process(comments: &[Comment], state: Arc<RwLock<AppState>>) -> Result<(), String> {
-    let mut comments = comments.to_vec();
-    comments.sort_by_key(|c| c.created_at);
-    tokio::spawn(async move {
-        let semaphore = Arc::new(Semaphore::new(50)); // Max 5 concurrent requests
-        let mut handles = vec![];
-
-        let evaluations = state.read().evaluations.clone();
-        let comments = comments
-            .into_iter()
-            .filter(|c| !evaluations.contains_key(&c.id))
-            .collect::<Vec<_>>();
-
-        {
-            let mut state = state.write();
-            state.processing.total = comments.len();
-            state.processing.done = 0;
-            state.processing.error = 0;
-        }
-
-        for comment in comments {
-            let sem = Arc::clone(&semaphore);
-            let state_c = state.clone();
-            let handle = tokio::spawn(async move {
-                for _ in 0..3 {
-                    let _permit = sem.acquire().await.unwrap();
-                    if !state_c.read().processing.enabled {
-                        return;
-                    }
-                    if state_c.read().evaluations.contains_key(&comment.id) {
-                        return;
-                    };
-                    let ev_result =
-                        appstate_evaluation::evaluate_single_comment(&comment, state_c.clone())
-                            .await;
-                    let mut state_w = state_c.write();
-                    match ev_result {
-                        Ok(_) => {
-                            state_w.processing.done += 1;
-                            return;
-                        }
-                        Err(_) => {
-                            continue;
-                        }
-                    };
-                }
-                state_c.write().processing.error += 1;
-            });
-            handles.push(handle);
-        }
-
-        let _ = futures::future::join_all(handles).await;
-        Ok::<(), String>(())
-    });
-
-    Ok(())
+macro_rules! event {
+    ($self:expr, $e:expr) => {
+        use Event::*;
+        let _ = $self.event_handler.tx.try_send(EventEnvelope {
+            event: $e,
+            span: tracing::Span::current(),
+        });
+    };
 }
 
 fn get_evaluation_cache(state: Arc<RwLock<AppState>>) {
@@ -108,6 +59,7 @@ fn get_evaluation_cache(state: Arc<RwLock<AppState>>) {
     });
 }
 
+// TODO: Move to event
 fn process_comments(state: Arc<RwLock<AppState>>, force: bool) {
     tokio::spawn(async move {
         {
@@ -210,7 +162,7 @@ fn scrollable_row(ui: &mut egui::Ui, id_salt: String, text: &str) {
 impl App {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
         apply_everforest_theme(&cc.egui_ctx, cc.egui_ctx.style().visuals.dark_mode);
-        let state_rwlock: AppState = cc
+        let mut state_rwlock: AppState = cc
             .storage
             .and_then(|storage| eframe::get_value(storage, eframe::APP_KEY))
             .or_else(|| {
@@ -230,19 +182,31 @@ impl App {
             })
             .unwrap_or_default();
 
+        state_rwlock = AppState {
+            auto_fetch: false,
+            batch_processing: false,
+            notifications_enabled: false,
+            ..state_rwlock
+        };
+        let event_state = cc
+            .storage
+            .and_then(|storage| eframe::get_value::<events::State>(storage, "event_state"))
+            .unwrap_or_default();
+        //let event_state = events::State::hydrate_event_state(&state_rwlock);
         let state = Arc::new(RwLock::new(state_rwlock.clone()));
-        let (comments_tx, comments_rx) = tokio::sync::mpsc::channel(1);
+
+        let event_handler = Arc::new(events::EventHandler::new(event_state));
 
         Self {
+            event_handler,
             state,
-            comments_tx,
-            comments_rx,
         }
     }
 
     fn render_table(&mut self, ui: &mut egui::Ui, _available_w: f32) {
+        let event_state = self.event_handler.state.read().clone();
         let mut state = self.state.write();
-        let indices: Vec<usize> = (0..state.comments.len()).collect();
+        let indices: Vec<usize> = (0..(&event_state.comments).len()).collect();
         let mut indices: Vec<usize> = indices
             .into_iter()
             .filter(|i| {
@@ -250,9 +214,9 @@ impl App {
                     return true;
                 }
                 let mut matches = false;
-                let comment = state.comments[*i].clone();
+                let comment = &event_state.comments[*i];
                 //if let Some(evaluation) = state.evaluations.get(&comment.id) {}
-                if let Some(t) = comment.text
+                if let Some(t) = &comment.text
                     && t.contains(&state.search_string)
                 {
                     matches = true;
@@ -263,8 +227,8 @@ impl App {
                 if state.min_score == 0 {
                     return true;
                 }
-                let comment = state.comments[*i].clone();
-                let Some(evaluation) = state.evaluations.get(&comment.id) else {
+                let comment = &event_state.comments[*i];
+                let Some(evaluation) = &event_state.evaluations.get(&comment.id) else {
                     return false;
                 };
                 evaluation.score >= state.min_score
@@ -273,8 +237,8 @@ impl App {
                 if !state.hide_seen {
                     return true;
                 }
-                let comment = state.comments[*i].clone();
-                let Some(flags) = state.flags.get(&comment.id) else {
+                let comment = &event_state.comments[*i];
+                let Some(flags) = &event_state.flags.get(&comment.id) else {
                     return true;
                 };
                 if flags.get_seen() { false } else { true }
@@ -283,20 +247,18 @@ impl App {
                 if !state.hide_in_progress {
                     return true;
                 }
-                let comment = state.comments[*i].clone();
-                let Some(flags) = state.flags.get(&comment.id) else {
+                let comment = &event_state.comments[*i];
+                let Some(flags) = &event_state.flags.get(&comment.id) else {
                     return true;
                 };
                 if flags.get_in_progress() { false } else { true }
             })
             .filter(|i| {
-                let comment_id = state.comments[*i].id;
-                !state
+                let comment_id = &event_state.comments[*i].id;
+                !&event_state
                     .flags
                     .get(&comment_id)
-                    .cloned()
-                    .unwrap_or_default()
-                    .get_hide()
+                    .map_or(false, |f| f.get_hide())
             })
             .collect();
 
@@ -304,22 +266,22 @@ impl App {
         indices.sort_by(|&a, &b| {
             let res = match state.sort_column {
                 SortColumn::Score => {
-                    let s_a = state
+                    let s_a = &event_state
                         .evaluations
-                        .get(&state.comments[a].id)
+                        .get(&event_state.comments[a].id)
                         .map(|e| e.score)
                         .unwrap_or(0);
-                    let s_b = state
+                    let s_b = &event_state
                         .evaluations
-                        .get(&state.comments[b].id)
+                        .get(&event_state.comments[b].id)
                         .map(|e| e.score)
                         .unwrap_or(0);
                     s_a.cmp(&s_b)
                 }
-                SortColumn::Id => state.comments[a].id.cmp(&state.comments[b].id),
-                SortColumn::CreatedAt => state.comments[a]
-                    .created_at
-                    .cmp(&state.comments[b].created_at),
+                SortColumn::Id => (&event_state.comments[a].id).cmp(&event_state.comments[b].id),
+                SortColumn::CreatedAt => {
+                    (&event_state.comments[a].created_at).cmp(&event_state.comments[b].created_at)
+                }
             };
             if state.descending { res.reverse() } else { res }
         });
@@ -392,9 +354,13 @@ impl App {
                     .show(ui, |ui| {
                         for row_idx in row_range {
                             let idx = indices[row_idx];
-                            let comment = &state.comments[idx].clone();
-                            let eval = state.evaluations.get(&comment.id);
-                            let flags = state.flags.get(&comment.id).cloned().unwrap_or_default();
+                            let comment = &event_state.comments[idx].clone();
+                            let eval = &event_state.evaluations.get(&comment.id);
+                            let flags = &event_state
+                                .flags
+                                .get(&comment.id)
+                                .copied()
+                                .unwrap_or_default();
 
                             if flags.get_in_progress() {
                                 ui.style_mut().visuals.override_text_color =
@@ -485,32 +451,65 @@ impl App {
                                     ui.spacing().interact_size.y,
                                 );
                                 let button = SizedButton::new(button_size, "Evaluate");
-                                let resp = ui.add_enabled(state.eval_cache.is_usable(), button);
+                                let resp =
+                                    //ui.add_enabled(state.eval_cache.is_usable() || true, button);
+                                    ui.add_enabled(true, button);
 
                                 if resp.clicked() {
-                                    let handle = self.state.clone();
+                                    let _span = tracing::debug_span!("CLICK Evaluate").entered();
+                                    let state = state.clone();
                                     let comment = comment.clone();
-                                    tokio::task::spawn(async move {
-                                        let _ = appstate_evaluation::evaluate_single_comment(
-                                            &comment, handle,
-                                        )
-                                        .await;
-                                    });
+                                    let requirements = state.requirements.clone();
+                                    let pdf_path = state.pdf_path.clone().unwrap_or_default();
+
+                                    for e in vec![
+                                        Event::Evaluate {
+                                            try_cache: true,
+                                            comment: comment.clone(),
+                                            requirements,
+                                            pdf_path,
+                                            permit: None,
+                                        },
+                                        Event::FetchJobDescription {
+                                            try_cache: true,
+                                            id: comment.id,
+                                            model: String::from(evaluation::MODEL),
+                                            input: comment.text.clone().unwrap_or_default(),
+                                            permit: None,
+                                        },
+                                    ] {
+                                        event!(self, e);
+                                    }
                                 };
-                                let mut flags =
-                                    state.flags.get(&comment.id).cloned().unwrap_or_default();
+                                let flags = &mut event_state
+                                    .flags
+                                    .get(&comment.id)
+                                    .copied()
+                                    .unwrap_or_default();
 
                                 if flags.get_hide() {
                                     let resp = ui.add(SizedButton::new(button_size, "Unhide"));
                                     if resp.clicked() {
                                         flags.set_hide(false);
-                                        state.flags.insert(comment.id.clone(), flags.clone());
+                                        event!(
+                                            self,
+                                            FlagEventUpdate {
+                                                id: comment.id,
+                                                flag: flags.clone(),
+                                            }
+                                        );
                                     }
                                 } else {
                                     let resp = ui.add(SizedButton::new(button_size, "Hide"));
                                     if resp.clicked() {
                                         flags.set_hide(true);
-                                        state.flags.insert(comment.id.clone(), flags.clone());
+                                        event!(
+                                            self,
+                                            FlagEventUpdate {
+                                                id: comment.id,
+                                                flag: flags.clone(),
+                                            }
+                                        );
                                     }
                                 }
                                 if flags.get_seen() {
@@ -518,13 +517,26 @@ impl App {
                                         ui.add(SizedButton::new(button_size, "Set not-seen"));
                                     if resp.clicked() {
                                         flags.set_seen(false);
-                                        state.flags.insert(comment.id.clone(), flags.clone());
+
+                                        event!(
+                                            self,
+                                            FlagEventUpdate {
+                                                id: comment.id,
+                                                flag: flags.clone(),
+                                            }
+                                        );
                                     }
                                 } else {
                                     let resp = ui.add(SizedButton::new(button_size, "Set seen"));
                                     if resp.clicked() {
                                         flags.set_seen(true);
-                                        state.flags.insert(comment.id.clone(), flags.clone());
+                                        event!(
+                                            self,
+                                            FlagEventUpdate {
+                                                id: comment.id,
+                                                flag: flags.clone(),
+                                            }
+                                        );
                                     }
                                 }
                                 if flags.get_in_progress() {
@@ -532,22 +544,34 @@ impl App {
                                         ui.add(SizedButton::new(button_size, "Not In Progress"));
                                     if resp.clicked() {
                                         flags.set_in_progress(false);
-                                        state.flags.insert(comment.id.clone(), flags.clone());
+                                        event!(
+                                            self,
+                                            FlagEventUpdate {
+                                                id: comment.id,
+                                                flag: flags.clone(),
+                                            }
+                                        );
                                     }
                                 } else {
                                     let resp = ui.add(SizedButton::new(button_size, "In Progress"));
                                     if resp.clicked() {
                                         flags.set_in_progress(true);
-                                        state.flags.insert(comment.id.clone(), flags.clone());
+                                        event!(
+                                            self,
+                                            FlagEventUpdate {
+                                                id: comment.id,
+                                                flag: flags.clone(),
+                                            }
+                                        );
                                     }
                                 }
 
-                                if state.notify_data.notified(comment.id) {
+                                if (&event_state.notify_data).notified(comment.id) {
                                     let reset_notify_button =
                                         SizedButton::new(button_size, "Remove Notify");
                                     let resp = ui.add(reset_notify_button);
                                     if resp.clicked() {
-                                        state.notify_data.remove(comment.id);
+                                        event!(self, RemoveNotify(comment.id));
                                     }
                                 }
                             });
@@ -562,11 +586,14 @@ impl App {
 impl eframe::App for App {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         let state: AppState = self.state.read().clone();
+        let event_state = self.event_handler.state.read().clone();
+        eframe::set_value(storage, "event_state", &event_state);
         eframe::set_value(storage, eframe::APP_KEY, &state);
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        autofetcher::update_comments(&mut self.comments_rx, &mut self.state.write().comments);
+        let eh = self.event_handler.clone();
+        let estate = eh.state.read().clone();
 
         egui::CentralPanel::default().show(ctx, |ui| {
             let total_width = ui.available_width();
@@ -601,12 +628,12 @@ impl eframe::App for App {
                             ui.label(format!("PDF Missing"));
                         }
 
-                        if state.eval_cache.is_usable() {
+                        if estate.eval_cache.is_usable() {
                             ui.label("Cache key: OK");
-                        } else if state.eval_cache.is_some() {
+                        } else if estate.eval_cache.is_some() {
                             ui.label("Cache key: Expired");
                         } else {
-                            match &state.cache_key_error {
+                            match &estate.cache_key_error {
                                 Some(err) => ui.label(
                                     egui::RichText::new(format!("Cache key error: {}", err))
                                         .color(egui::Color32::RED),
@@ -621,44 +648,65 @@ impl eframe::App for App {
                             if toggle_ui(ui, &mut state.auto_fetch).changed() {
                                 if state.auto_fetch {
                                     let url = state.hn_url.clone();
-                                    state.auto_fetcher.enable(url, self.comments_tx.clone());
+                                    event!(self, AutoFetchStart(url));
                                 } else {
-                                    state.auto_fetcher.disable();
+                                    event!(self, AutoFetchStop);
                                 }
                             }
                         });
 
-                        if state.processing.enabled {
+                        ui.horizontal(|ui| {
+                            ui.label("Notifications");
+                            if toggle_ui(ui, &mut state.notifications_enabled).changed() {
+                                if state.notifications_enabled {
+                                    event!(self, SetNotifications { enabled: true });
+                                } else {
+                                    event!(self, SetNotifications { enabled: false });
+                                }
+                            }
+                        });
+
+                        if estate.processing.enabled {
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = 0.0;
 
                                 ui.label("Processing: ");
-                                ui.colored_label(Color32::GREEN, state.processing.done.to_string());
+                                ui.colored_label(
+                                    Color32::GREEN,
+                                    estate.processing.done.to_string(),
+                                );
                                 ui.label("/");
-                                ui.colored_label(Color32::RED, state.processing.error.to_string());
-                                ui.label(format!("/{}", state.processing.total));
+                                ui.colored_label(Color32::RED, estate.processing.error.to_string());
+                                ui.label(format!("/{}", estate.processing.total));
                             });
-                        } else if state.processing.total > 0 {
+                        } else if estate.processing.total > 0 {
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = 0.0;
 
                                 ui.label("Processing (stopped): ");
-                                ui.colored_label(Color32::GREEN, state.processing.done.to_string());
+                                ui.colored_label(
+                                    Color32::GREEN,
+                                    estate.processing.done.to_string(),
+                                );
                                 ui.label("/");
-                                ui.colored_label(Color32::RED, state.processing.error.to_string());
-                                ui.label(format!("/{}", state.processing.total));
+                                ui.colored_label(Color32::RED, estate.processing.error.to_string());
+                                ui.label(format!("/{}", estate.processing.total));
                             });
                         } else {
                             ui.label("Processing stopped");
                         }
-                        ui.label(format!("NTFY topic: {}", state.notify_data.topic));
+                        ui.label(format!("NTFY topic: {}", estate.notify_data.topic));
                         let mut evaluated = 0;
-                        for c in state.comments.iter() {
-                            if state.evaluations.contains_key(&c.id) {
+                        for c in estate.comments.iter() {
+                            if estate.evaluations.contains_key(&c.id) {
                                 evaluated += 1;
                             }
                         }
-                        ui.label(format!("Evaluated: {}/{}", evaluated, state.comments.len()));
+                        ui.label(format!(
+                            "Evaluated: {}/{}",
+                            evaluated,
+                            estate.comments.len()
+                        ));
                         ui.add_space(10.0);
                         ui.separator();
                         ui.with_layout(
@@ -683,13 +731,23 @@ impl eframe::App for App {
                                     process_comments(self.state.clone(), true);
                                 }
                                 if ui.button("Batch Process").clicked() {
-                                    state.processing.enabled = !state.processing.enabled;
-                                    if state.processing.enabled {
-                                        let _ = batch_process(&state.comments, self.state.clone());
+                                    state.batch_processing = !state.batch_processing;
+                                    if state.batch_processing
+                                        && let Some(pdf_path) = state.pdf_path.clone()
+                                    {
+                                        event!(
+                                            self,
+                                            BatchProcessingStart(
+                                                state.requirements.clone(),
+                                                pdf_path,
+                                            )
+                                        );
+                                    } else {
+                                        event!(self, BatchProcessingStop);
                                     }
                                 }
                                 if ui.button("Nuke Evaluations").clicked() {
-                                    state.evaluations = HashMap::new();
+                                    event!(self, RemoveEvaluationAll);
                                 }
                                 if ui.button("Export State").clicked() {
                                     if let Ok(json_str) = serde_json::to_string(&state.clone()) {
@@ -749,9 +807,20 @@ impl eframe::App for App {
                 self.render_table(ui, total_width);
             });
         });
+        self.read_data_from_gui()
     }
 }
 
+impl App {
+    fn read_data_from_gui(&self) {
+        if let Some(state) = self.state.try_read()
+            && let Some(event_state) = self.event_handler.state.try_read()
+            && state.api_key != event_state.api_key.to_string()
+        {
+            event!(self, SyncApiKey(state.api_key.clone()));
+        }
+    }
+}
 pub fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([600.0, 800.0]),
