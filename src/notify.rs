@@ -88,7 +88,4 @@ impl NotifyData {
     pub fn notified(&self, id: u32) -> bool {
         self.notified_ids.contains(&id)
     }
-    pub fn remove(&mut self, id: u32) {
-        self.notified_ids.remove(&id);
-    }
 }

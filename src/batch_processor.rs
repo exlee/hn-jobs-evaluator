@@ -19,9 +19,6 @@ pub struct BatchProcessor {
     handle: Option<AbortHandle>,
 }
 impl BatchProcessor {
-    pub fn new() -> Self {
-        BatchProcessor { handle: None }
-    }
     pub fn enable(
         &mut self,
         semaphore: Arc<Semaphore>,

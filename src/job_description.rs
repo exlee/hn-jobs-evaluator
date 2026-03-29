@@ -1,9 +1,7 @@
 use std::{collections::HashMap, time::Duration};
 
-use llmuxer::{LlmConfig, ResponseShape};
+use llmuxer::ResponseShape;
 use serde::{Deserialize, Serialize};
-
-const MODEL: &str = "gemini-3.1-flash-lite-preview";
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 #[serde(default)]
@@ -85,6 +83,8 @@ mod tests {
     #[cfg(feature = "integration-tests")]
     #[test]
     fn test_parse_job_description() {
+        use crate::evaluation::MODEL;
+
         let api_key = env::var("TEST_GOOGLE_API_KEY")
             .expect("TEST_GOOGLE_API_KEY must be set to run this test");
 
@@ -123,26 +123,4 @@ mod tests {
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct JobDescriptions {
     pub data: HashMap<u32, JobDescription>,
-}
-
-impl JobDescriptions {
-    pub fn get(&mut self, id: u32, input: &str, api_key: &str) -> anyhow::Result<JobDescription> {
-        if self.data.contains_key(&id) {
-            return Ok(self.data.get(&id).unwrap().clone());
-        }
-        let llm_config = LlmConfig {
-            provider: llmuxer::Provider::Gemini,
-            api_key: String::from(api_key),
-            base_url: None,
-            model: String::from(MODEL),
-        };
-        let result = parse_job_description(llm_config, input);
-        match result {
-            Ok(jd) => {
-                self.data.insert(id, jd.clone());
-                Ok(jd)
-            }
-            Err(e) => Err(anyhow::anyhow!(e.to_string())),
-        }
-    }
 }

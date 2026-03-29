@@ -3,15 +3,11 @@ use crate::{
     evaluation,
     events::{self, Event, EventEnvelope},
 };
-use chrono::Utc;
 use eframe::egui::{self, Button, Color32, Layout, Widget};
 use parking_lot::RwLock;
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{path::PathBuf, sync::Arc};
 
-use crate::{
-    comments::{self},
-    evaluation::{Usable, create_evaluation_cache, estimate_accurate_tokens},
-};
+use crate::evaluation::{Usable, estimate_accurate_tokens};
 
 struct App {
     event_handler: Arc<events::EventHandler>,
@@ -20,58 +16,13 @@ struct App {
 
 macro_rules! event {
     ($self:expr, $e:expr) => {
+        #[allow(unused)]
         use Event::*;
         let _ = $self.event_handler.tx.try_send(EventEnvelope {
             event: $e,
             span: tracing::Span::current(),
         });
     };
-}
-
-fn get_evaluation_cache(state: Arc<RwLock<AppState>>) {
-    tokio::spawn(async move {
-        {
-            let mut state_w = state.write();
-            state_w.eval_cache = None;
-            state_w.cache_key_error = None;
-        }
-        let (api_key, pdf_path, requirements) = {
-            let state = state.read();
-            let pdf_path = state.pdf_path.clone();
-            (
-                state.api_key.clone(),
-                PathBuf::from(pdf_path.unwrap().clone()),
-                state.requirements.clone(),
-            )
-        };
-        let ttl = Duration::from_hours(24);
-        match create_evaluation_cache(&api_key, &pdf_path, &requirements, ttl).await {
-            Ok(cache_key) => {
-                let ev_cache = evaluation::EvaluationCache {
-                    key: cache_key,
-                    timestamp: Utc::now(),
-                    ttl: ttl,
-                };
-                state.write().eval_cache = Some(ev_cache);
-            }
-            Err(err) => state.write().cache_key_error = Some(err),
-        }
-    });
-}
-
-// TODO: Move to event
-fn process_comments(state: Arc<RwLock<AppState>>, force: bool) {
-    tokio::spawn(async move {
-        {
-            let mut state = state.write();
-            state.comments = vec![];
-        }
-        let hn_url = state.read().hn_url.clone();
-        let top_level = comments::get_comments_from_url(&hn_url, force).await;
-
-        let mut state_w = state.write();
-        state_w.comments = top_level.into_iter().map(|t| t.clone()).collect();
-    });
 }
 
 pub struct SizedButton {
@@ -720,15 +671,14 @@ impl eframe::App for App {
                                         state.pdf_path = Some(path.display().to_string());
                                     }
                                 }
-                                if ui.button("Get Ev Cache").clicked() {
-                                    get_evaluation_cache(self.state.clone());
-                                }
 
                                 if ui.button("Process Comments").clicked() {
-                                    process_comments(self.state.clone(), false);
-                                }
-                                if ui.button("Force Process Comments").clicked() {
-                                    process_comments(self.state.clone(), true);
+                                    event!(
+                                        self,
+                                        CommentsProcess {
+                                            url: state.hn_url.clone()
+                                        }
+                                    );
                                 }
                                 if ui.button("Batch Process").clicked() {
                                     state.batch_processing = !state.batch_processing;

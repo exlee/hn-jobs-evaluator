@@ -5,7 +5,7 @@ use tokio::{sync::mpsc::Sender, task::AbortHandle};
 use tracing::Instrument as _;
 
 use crate::{
-    comments::{self, Comment},
+    comments::{self},
     events::{Event, EventEnvelope},
 };
 

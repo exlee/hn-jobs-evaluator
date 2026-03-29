@@ -13,12 +13,12 @@ use tokio::sync::{
     OwnedSemaphorePermit, Semaphore, SemaphorePermit,
     mpsc::{self, Sender},
 };
-use tracing::instrument;
+use tracing::{Instrument as _, instrument};
 
 use crate::{
     autofetcher::AutoFetcher,
     batch_processor::BatchProcessor,
-    comments::Comment,
+    comments::{self, Comment},
     common_gui::{Flags, ProcessingData},
     evaluation::{self, Evaluation, Usable},
     job_description::{self, JobDescriptions},
@@ -42,30 +42,6 @@ pub struct State {
     pub barriers: HashMap<u32, Vec<Barrier>>,
     pub notifications: bool,
 }
-
-// impl State {
-//     #[allow(deprecated)]
-//     pub fn hydrate_event_state(app_state: &crate::common_gui::AppState) -> State {
-//         let api_key: Arc<str> = Arc::from(app_state.api_key.as_str());
-//         State {
-//             hydrated: false,
-//             auto_fetcher: app_state.auto_fetcher.clone(),
-//             batch_processor: BatchProcessor::new(),
-//             cache_key_error: app_state.cache_key_error.clone(),
-//             evaluations: app_state.evaluations.clone(),
-//             comments: app_state.comments.clone(),
-//             job_descriptions: app_state.job_descriptions.data.clone(),
-//             notify_data: app_state.notify_data.clone(),
-//             eval_cache: app_state.eval_cache.clone(),
-//             flags: app_state.flags.clone(),
-//             processing: app_state.processing.clone(),
-//             api_key,
-//             barriers: HashMap::new(),
-//             notifications: app_state.notifications_enabled,
-//             ..Default::default()
-//         }
-//     }
-// }
 
 #[derive(Eq, PartialEq, Hash, Serialize, Deserialize, Clone, Debug)]
 pub enum BarrierData {
@@ -96,6 +72,7 @@ pub enum Event {
     FetchJobDescription { try_cache: bool, id: u32, model: String, input: String, #[serde(skip)] permit: Option<Arc<OwnedSemaphorePermit>> },
     FlagEventUpdate { id: u32, flag: Flags },
     Notify { id: u32 },
+    CommentsProcess { url: String },
     RemoveEvaluationAll,
     RemoveNotify(u32),
     Signal(u32, BarrierData),
@@ -187,11 +164,14 @@ impl EventHandler {
         use Event::*;
         tracing::debug!("handle: {:?}", env.event);
         match env.event {
+            AutoFetchStart(_)=>self.process_auto_fetch_start(env,queue),
+            AutoFetchStop=>self.process_auto_fetch_stop(env,queue),
             BatchProcessingStart(..)=>self.process_batch_processing_start(env,queue),
             BatchProcessingStop=>self.process_batch_processing_stop(env,queue),
+            CommentsProcess{..} => self.process_comments(env, queue),
             CommentsUpdate{..}=>self.process_comments_update(env,queue),
-            Evaluate{..}=>self.process_evaluate(env,queue),
             EvaluateTry{..}=>self.process_evaluate_try(env,queue),
+            Evaluate{..}=>self.process_evaluate(env,queue),
             EvaluationCacheFetch{..}=>self.process_evaluate_cache_fetch(env,queue),
             EvaluationEnrichWithJd{..}=>self.process_evaluate_enrich_with_jd(env,queue),
             FetchJobDescription{..}=>self.process_job_description_fetch(env,queue),
@@ -199,11 +179,9 @@ impl EventHandler {
             Notify{..}=>self.process_notify(env,queue),
             RemoveEvaluationAll=>self.process_remove_evaluation_all(env,queue),
             RemoveNotify(_)=>self.process_remove_notify(env,queue),
+            SetNotifications { enabled } => self.state.write().notifications = enabled,
             Signal(..)=>self.process_signal(env,queue),
             SyncApiKey(_)=>self.process_sync_apikey(env,queue),
-            AutoFetchStart(_)=>self.process_auto_fetch_start(env,queue),
-            AutoFetchStop=>self.process_auto_fetch_stop(env,queue),
-            SetNotifications { enabled } => self.state.write().notifications = enabled
         }
     }
     #[tracing::instrument(skip_all, parent=&env.span)]
@@ -241,6 +219,25 @@ impl EventHandler {
         ev_guard!(env => BatchProcessingStop);
 
         self.state.write().batch_processor.disable();
+    }
+    #[tracing::instrument(skip_all, parent=&env.span)]
+    fn process_comments(&self, env: EventEnvelope, queue: &mut VecDeque<EventEnvelope>) {
+        ev_guard!(env => CommentsProcess { url } );
+        let tx = self.tx.clone();
+        tokio::task::spawn(
+            async move {
+                let comments = comments::get_comments_from_url(&url, true)
+                    .instrument(tracing::info_span!("comments_update_loop"))
+                    .await;
+                let _ = tx
+                    .send(EventEnvelope {
+                        event: Event::CommentsUpdate { comments },
+                        span: tracing::info_span!("auto_fetch_comments"),
+                    })
+                    .await;
+            }
+            .instrument(env.span),
+        );
     }
     #[tracing::instrument(skip_all, parent=&env.span)]
     fn process_comments_update(&self, env: EventEnvelope, queue: &mut VecDeque<EventEnvelope>) {

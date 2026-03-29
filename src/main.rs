@@ -1,11 +1,7 @@
 use std::collections::HashMap;
 
-use opentelemetry_otlp::WithExportConfig as _;
 use opentelemetry_otlp::WithHttpConfig as _;
-use opentelemetry_otlp::WithTonicConfig;
 use tokio;
-use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
-use tracing_tree::HierarchicalLayer;
 
 mod appstate_evaluation;
 mod autofetcher;
@@ -56,7 +52,6 @@ use opentelemetry_sdk::{
     resource::Resource,
     trace::{RandomIdGenerator, Sampler, SdkTracerProvider},
 };
-use tonic::metadata::MetadataMap;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 fn make_resource() -> Resource {
