@@ -50,11 +50,7 @@ impl NotifyData {
 
         let message = format!(
             "Evaluation Score: {}\n\nTechnologies: {}, Eval: {}\nTech: {}\nComp: {}",
-            eval.score,
-            technologies,
-            eval.evaluation,
-            eval.technology_alignment,
-            eval.compensation_alignment
+            eval.score, technologies, eval.evaluation, eval.technology_alignment, eval.compensation_alignment
         );
 
         let company_name = eval

@@ -16,9 +16,9 @@ use tokio::sync::{
 use tracing::{Instrument as _, instrument};
 
 use crate::{
-    backend::app_service::{self, AppService},
     backend::{
         self,
+        app_service::{self, AppService},
         autofetcher::AutoFetcher,
         batch_processor::BatchProcessor,
         comments::Comment,
@@ -27,7 +27,7 @@ use crate::{
         notify::NotifyData,
     },
     common_gui::{Flags, ProcessingData},
-    models::Usable as _,
+    models::{AppServiceDefault, Usable as _},
 };
 
 #[derive(Serialize, Deserialize, Default, Clone)]
@@ -118,18 +118,18 @@ pub struct EventHandler {
     pub app_service: Arc<dyn AppService>,
 }
 impl EventHandler {
-    pub fn new(state: State) -> Self {
+    pub fn new(state: State, app_service: Arc<dyn AppService>) -> Self {
         let arw_state = Arc::new(RwLock::new(state));
         tracing::debug!("spawning handler");
-        let tx = Self::spawn(arw_state.clone());
+        let tx = Self::spawn(arw_state.clone(), app_service.clone());
         Self {
             state: arw_state,
             api_semaphore: new_api_semaphore(),
             tx,
-            app_service: Arc::new(app_service::AppServiceDefault),
+            app_service,
         }
     }
-    pub fn spawn(state: Arc<RwLock<State>>) -> Sender<EventEnvelope> {
+    pub fn spawn(state: Arc<RwLock<State>>, app_service: Arc<dyn AppService>) -> Sender<EventEnvelope> {
         let (tx, rx) = mpsc::channel(100);
         let event_handler = Self {
             state,
@@ -204,11 +204,7 @@ impl EventHandler {
         self.state.write().auto_fetcher.disable();
     }
     #[tracing::instrument(skip_all, parent=&env.span)]
-    fn process_batch_processing_start(
-        &self,
-        env: EventEnvelope,
-        queue: &mut VecDeque<EventEnvelope>,
-    ) {
+    fn process_batch_processing_start(&self, env: EventEnvelope, queue: &mut VecDeque<EventEnvelope>) {
         ev_guard!(env => BatchProcessingStart{requirements, pdf_path});
 
         self.state.write().batch_processor.enable(
@@ -220,11 +216,7 @@ impl EventHandler {
         );
     }
     #[tracing::instrument(skip_all, parent=&env.span)]
-    fn process_batch_processing_stop(
-        &self,
-        env: EventEnvelope,
-        queue: &mut VecDeque<EventEnvelope>,
-    ) {
+    fn process_batch_processing_stop(&self, env: EventEnvelope, queue: &mut VecDeque<EventEnvelope>) {
         ev_guard!(env => BatchProcessingStop);
 
         self.state.write().batch_processor.disable();
@@ -317,12 +309,13 @@ impl EventHandler {
         }
         let evaluation = self.state.read().evaluations.get(&id).cloned();
         let state = self.state.clone();
+        let app_service = self.app_service.clone();
         tokio::spawn(async move {
             let _span = env.span.entered();
             let _guard = tracing::info_span!("notify evaluation");
             if let Some(eval) = evaluation {
                 let mut state = state.write();
-                state.notify_data.notify_evaluation(id, &eval);
+                app_service.notify_evaluation(id, &mut state.notify_data, &eval);
             }
         });
     }
@@ -353,11 +346,7 @@ impl EventHandler {
         });
     }
     #[tracing::instrument(skip_all, parent=&env.span)]
-    fn process_evaluate_cache_fetch(
-        &self,
-        env: EventEnvelope,
-        queue: &mut VecDeque<EventEnvelope>,
-    ) {
+    fn process_evaluate_cache_fetch(&self, env: EventEnvelope, queue: &mut VecDeque<EventEnvelope>) {
         ev_guard!(env => EvaluationCacheFetch { requirements, pdf_path, then });
 
         let api_key = self.state.read().api_key.clone();
@@ -399,11 +388,7 @@ impl EventHandler {
         });
     }
     #[tracing::instrument(skip_all, parent=&env.span)]
-    fn process_evaluate_enrich_with_jd(
-        &self,
-        env: EventEnvelope,
-        queue: &mut VecDeque<EventEnvelope>,
-    ) {
+    fn process_evaluate_enrich_with_jd(&self, env: EventEnvelope, queue: &mut VecDeque<EventEnvelope>) {
         ev_guard!(env => EvaluationEnrichWithJd { comment_id });
         let mut state = self.state.write();
         if let (Some(mut ev), Some(jd)) = (
@@ -419,11 +404,7 @@ impl EventHandler {
         }
     }
     #[tracing::instrument(skip_all, parent=&env.span)]
-    fn process_job_description_fetch(
-        &self,
-        env: EventEnvelope,
-        queue: &mut VecDeque<EventEnvelope>,
-    ) {
+    fn process_job_description_fetch(&self, env: EventEnvelope, queue: &mut VecDeque<EventEnvelope>) {
         ev_guard!(env => FetchJobDescription { id, model, input, try_cache, permit});
         {
             let mut state = self.state.write();
@@ -452,10 +433,8 @@ impl EventHandler {
 
                 let input = input.clone();
                 let llm_config = llm_config.clone();
-                let job_result = tokio::task::spawn_blocking(move || {
-                    app_service.parse_job_description(llm_config, &input)
-                })
-                .await;
+                let job_result =
+                    tokio::task::spawn_blocking(move || app_service.parse_job_description(llm_config, &input)).await;
 
                 match job_result {
                     Err(e) => tracing::error!("Join Error: {:?}", e),
@@ -485,11 +464,7 @@ impl EventHandler {
         self.state.write().notify_data.notified_ids.remove(&id);
     }
     #[tracing::instrument(skip_all, parent=&env.span)]
-    fn process_remove_evaluation_all(
-        &self,
-        env: EventEnvelope,
-        queue: &mut VecDeque<EventEnvelope>,
-    ) {
+    fn process_remove_evaluation_all(&self, env: EventEnvelope, queue: &mut VecDeque<EventEnvelope>) {
         ev_guard!(env => RemoveEvaluationAll);
         tracing::info!("Remove all evaluation disabled");
         // self.state.write().evaluations.clear();
@@ -601,7 +576,7 @@ impl<'de> Deserialize<'de> for EventHandler {
         D: serde::Deserializer<'de>,
     {
         let state = State::deserialize(deserializer)?;
-        Ok(EventHandler::new(state))
+        Ok(EventHandler::new(state, Arc::new(AppServiceDefault {})))
     }
 }
 impl Default for EventHandler {

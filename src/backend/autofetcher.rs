@@ -1,25 +1,29 @@
 use std::{sync::Arc, time::Duration};
 
-use serde::{Deserialize, Serialize};
 use tokio::{sync::mpsc::Sender, task::AbortHandle};
 use tracing::Instrument as _;
 
 use crate::{
-    backend::app_service::AppService,
-    backend::comments::{self},
+    backend::app_service::{AppService, AppServiceDefault},
+    demo::AppServiceDemo,
     events::{Event, EventEnvelope},
 };
 
 #[derive(Debug, Clone)]
 pub struct AutoFetcher {
-    app_service: Arc<dyn AppService>,
-    handle: Option<AbortHandle>,
+    pub app_service: Arc<dyn AppService>,
+    pub handle: Option<AbortHandle>,
 }
 
 impl Default for AutoFetcher {
     fn default() -> Self {
+        let app_service: Arc<dyn AppService> = if crate::demo::is_demo() {
+            Arc::new(AppServiceDemo {})
+        } else {
+            Arc::new(AppServiceDefault)
+        };
         Self {
-            app_service: Arc::new(crate::backend::app_service::AppServiceDefault),
+            app_service,
             handle: None,
         }
     }

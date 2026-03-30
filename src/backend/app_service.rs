@@ -6,17 +6,19 @@ use crate::backend::evaluation::{
     Evaluation, EvaluationCache, create_evaluation_cache as eval_create_evaluation_cache,
     evaluate_comment_cached as eval_evaluate_comment_cached,
 };
-use crate::backend::job_description::{
-    JobDescription, parse_job_description as jd_parse_job_description,
-};
+use crate::backend::job_description::{JobDescription, parse_job_description as jd_parse_job_description};
+use crate::backend::notify::NotifyData;
 use chrono::Utc;
 
+#[macro_export]
 macro_rules! async_res {
     ($out:ty) => {
         std::pin::Pin<Box<dyn std::future::Future<Output = $out> + Send + '_>>
     };
 }
+pub use async_res;
 
+#[allow(unused)]
 pub trait Blank {
     fn blank() -> Self;
 }
@@ -67,18 +69,15 @@ pub trait AppService: Send + Sync {
         requirements: &str,
         ttl: Duration,
     ) -> async_res!(Result<String, String>);
-    fn parse_job_description(
-        &self,
-        llm_config: llmuxer::LlmConfig,
-        input: &str,
-    ) -> Result<JobDescription, String>;
+    fn parse_job_description(&self, llm_config: llmuxer::LlmConfig, input: &str) -> Result<JobDescription, String>;
+    fn notify_evaluation(&self, id: u32, notify_data: &mut NotifyData, evaluation: &Evaluation) -> anyhow::Result<()>;
 }
+
 impl std::fmt::Debug for dyn AppService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "AppService")
     }
 }
-
 pub struct AppServiceDefault;
 
 impl AppService for AppServiceDefault {
@@ -109,16 +108,14 @@ impl AppService for AppServiceDefault {
         let api_key = api_key.to_string();
         let pdf_path = pdf_path.to_path_buf();
         let requirements = requirements.to_string();
-        Box::pin(async move {
-            eval_create_evaluation_cache(&api_key, &pdf_path, &requirements, ttl).await
-        })
+        Box::pin(async move { eval_create_evaluation_cache(&api_key, &pdf_path, &requirements, ttl).await })
     }
 
-    fn parse_job_description(
-        &self,
-        llm_config: llmuxer::LlmConfig,
-        input: &str,
-    ) -> Result<JobDescription, String> {
+    fn parse_job_description(&self, llm_config: llmuxer::LlmConfig, input: &str) -> Result<JobDescription, String> {
         jd_parse_job_description(llm_config, input)
+    }
+
+    fn notify_evaluation(&self, id: u32, notify_data: &mut NotifyData, evaluation: &Evaluation) -> anyhow::Result<()> {
+        notify_data.notify_evaluation(id, evaluation)
     }
 }

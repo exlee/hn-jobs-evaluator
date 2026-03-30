@@ -75,8 +75,8 @@ impl BatchProcessor {
                             // Semaphore closed, stop processing
                             return;
                         }
-                        let _ = tokio::time::sleep(Duration::from_secs(5)).await;
                     }
+                    let _ = tokio::time::sleep(Duration::from_secs(5)).await;
                 }
                 .instrument(tracing::info_span!("comments processing loop"))
                 .await
