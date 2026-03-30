@@ -83,7 +83,7 @@ mod tests {
     #[cfg(feature = "integration-tests")]
     #[test]
     fn test_parse_job_description() {
-        use crate::evaluation::MODEL;
+        use crate::backend::evaluation::MODEL;
 
         let api_key = env::var("TEST_GOOGLE_API_KEY")
             .expect("TEST_GOOGLE_API_KEY must be set to run this test");

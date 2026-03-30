@@ -1,14 +1,11 @@
 use anyhow::Context;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use std::io::Read;
-use std::sync::OnceLock;
 use std::time::Duration;
 use std::{fs, path::Path};
-use tokenizers::Tokenizer;
 
-use crate::comments::Comment;
-use crate::job_description::JobDescription;
+use crate::backend::comments::Comment;
+use crate::backend::job_description::JobDescription;
 
 pub const MODEL: &str = "gemini-3.1-flash-lite-preview";
 
@@ -160,21 +157,4 @@ pub async fn create_evaluation_cache(
     } else {
         Ok(res["name"].as_str().unwrap().to_string())
     }
-}
-
-static COMPRESSED_TOKENIZER: &[u8] = include_bytes!("../assets/tokenizer.json.zst");
-static TOKENIZER: OnceLock<Tokenizer> = OnceLock::new();
-pub fn estimate_accurate_tokens(text: &str) -> usize {
-    let tok = TOKENIZER.get_or_init(|| get_tokenizer());
-
-    tok.encode(text, true).map(|e| e.len()).unwrap_or(0)
-}
-fn get_tokenizer() -> Tokenizer {
-    // Decompress zstd blob into a vector
-    let mut decoder = zstd::Decoder::new(COMPRESSED_TOKENIZER).unwrap();
-    let mut json_bytes = Vec::new();
-    decoder.read_to_end(&mut json_bytes).unwrap();
-
-    // Load tokenizer from the JSON buffer in memory
-    Tokenizer::from_bytes(json_bytes).expect("Failed to load tokenizer")
 }

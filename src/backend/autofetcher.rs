@@ -1,27 +1,39 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use serde::{Deserialize, Serialize};
 use tokio::{sync::mpsc::Sender, task::AbortHandle};
 use tracing::Instrument as _;
 
 use crate::{
-    comments::{self},
+    backend::app_service::AppService,
+    backend::comments::{self},
     events::{Event, EventEnvelope},
 };
 
-#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct AutoFetcher {
-    #[serde(skip)]
+    app_service: Arc<dyn AppService>,
     handle: Option<AbortHandle>,
+}
+
+impl Default for AutoFetcher {
+    fn default() -> Self {
+        Self {
+            app_service: Arc::new(crate::backend::app_service::AppServiceDefault),
+            handle: None,
+        }
+    }
 }
 impl AutoFetcher {
     pub fn enable(&mut self, url: String, tx: Sender<EventEnvelope>) {
         if self.handle.is_some() {
             return;
         }
+        let app_service = Arc::clone(&self.app_service);
         let join = tokio::task::spawn(async move {
             loop {
-                let comments = comments::get_comments_from_url(&url, true)
+                let comments = app_service
+                    .get_comments_from_url(&url, true)
                     .instrument(tracing::info_span!("comments_update_loop"))
                     .await;
                 let _ = tx

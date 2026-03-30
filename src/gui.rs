@@ -1,13 +1,16 @@
 use crate::{
     common_gui::*,
-    evaluation,
     events::{self, Event, EventEnvelope},
 };
-use eframe::egui::{self, Button, Color32, Layout, Widget};
+use eframe::egui::{self, AtomExt, Button, Color32, Layout, Widget};
 use parking_lot::RwLock;
 use std::{path::PathBuf, sync::Arc};
+use tracing::instrument;
 
-use crate::evaluation::{Usable, estimate_accurate_tokens};
+use crate::models::Usable;
+use crate::tokens::estimate_accurate_tokens;
+
+const TABLE_FONT_SIZE: f32 = 10.0;
 
 struct App {
     event_handler: Arc<events::EventHandler>,
@@ -56,6 +59,52 @@ pub trait TableCell {
     where
         F: FnOnce(&mut Self);
 }
+fn add_meter(ui: &mut egui::Ui, score: u32) {
+    let (_, rect) = ui.allocate_space(ui.available_size());
+    let painter = ui.painter();
+    let num_bars = 30;
+    let used_space = 0.4;
+    let total_width = rect.width() * used_space;
+    let x_offset = rect.left() + (rect.width() * ((1.0 - used_space) / 2.0));
+    let bar_width = total_width;
+    let bar_unit_height = rect.height() / num_bars as f32 - 2.0;
+    let spacing = 2.0;
+    let score_per_bars = 100 / num_bars;
+
+    for i in 0..num_bars {
+        let x = x_offset + i as f32 * bar_width;
+        let bar_rect = egui::Rect::from_min_size(
+            egui::pos2(
+                x_offset,
+                rect.bottom() - (i + 1) as f32 * (bar_unit_height + 1.0),
+            ),
+            egui::vec2(bar_width, bar_unit_height - spacing),
+        );
+
+        let color = if (i as u32 * score_per_bars) < score {
+            let t = (i as f32) / (num_bars as f32);
+            // Non-linear transition: stay darker for longer before brightening
+            let t_curve = t.powf(2.0);
+            // Almost black/dark green to vibrant green
+            egui::Color32::from_rgb(
+                (20.0 * t_curve) as u8,
+                (50.0 + 205.0 * t_curve) as u8,
+                (20.0 * t_curve) as u8,
+            )
+        } else {
+            //egui::Color32::from_gray(50)
+            ui.style()
+                .visuals
+                .widgets
+                .noninteractive
+                .bg_fill
+                .blend(Color32::BLACK.linear_multiply(0.2))
+        };
+
+        painter.rect_filled(bar_rect, 2.0, color);
+    }
+}
+
 impl TableCell for egui::Ui {
     fn table_cell<F>(&mut self, cols: &[f32], avw: f32, col_number: usize, fun: F)
     where
@@ -94,7 +143,7 @@ fn scrollable_row(ui: &mut egui::Ui, id_salt: String, text: &str) {
                         text,
                         0.0,
                         egui::text::TextFormat {
-                            font_id: egui::FontId::proportional(12.0),
+                            font_id: egui::FontId::proportional(TABLE_FONT_SIZE),
                             color: ui.visuals().text_color(),
                             line_height: Some(20.0),
                             ..Default::default()
@@ -252,7 +301,7 @@ impl App {
             .striped(true)
             .show(ui, |ui| {
                 ui.table_cell_h(&cols, available_w, 0, |ui| {
-                    if ui.button("CreatedAt").clicked() {
+                    if ui.button("Created At").clicked() {
                         state.sort_column = SortColumn::CreatedAt;
                         state.descending = !state.descending;
                     }
@@ -285,7 +334,11 @@ impl App {
                 });
 
                 ui.table_cell_h(&cols, available_w, 6, |ui| {
-                    ui.label(" ");
+                    ui.label(format!(
+                        "Showing {}/{}",
+                        indices.len(),
+                        event_state.comments.len()
+                    ));
                 });
 
                 ui.end_row();
@@ -301,9 +354,14 @@ impl App {
                 egui::Grid::new("body")
                     .num_columns(cols.len())
                     .min_row_height(200.0)
+                    //.spacing((10.0, 50.0))
                     .striped(true)
                     .show(ui, |ui| {
+                        ui.style_mut()
+                            .text_styles
+                            .insert(egui::TextStyle::Body, egui::FontId::proportional(10.0));
                         for row_idx in row_range {
+                            let cols = cols.clone();
                             let idx = indices[row_idx];
                             let comment = &event_state.comments[idx].clone();
                             let eval = &event_state.evaluations.get(&comment.id);
@@ -328,21 +386,202 @@ impl App {
                                 ui.vertical_centered(|ui| {
                                     ui.label(format!("{}", comment.created_at));
                                 });
+                                if let Some(ev) = eval
+                                    && let Some(jd) = ev.job_description.clone()
+                                {
+                                    ui.vertical(|ui| {
+                                        ui.add_space(10.0);
+
+                                        if !jd.company_name.is_empty() && jd.company_name != "null"
+                                        {
+                                            ui.label(
+                                                egui::RichText::new(format!("{}", jd.company_name))
+                                                    .size(TABLE_FONT_SIZE),
+                                            );
+                                        }
+                                        if !jd.job_title.is_empty() {
+                                            ui.label(
+                                                egui::RichText::new(format!("{}", jd.job_title))
+                                                    .size(TABLE_FONT_SIZE),
+                                            );
+                                        }
+                                        ui.add_space(5.0);
+                                        if !jd.technologies.is_empty() {
+                                            ui.horizontal_top(|ui| {
+                                                ui.set_max_width(130.0);
+                                                ui.label(
+                                                    egui::RichText::new("Techs: ")
+                                                        .size(TABLE_FONT_SIZE),
+                                                );
+                                                let mut job = egui::text::LayoutJob::default();
+                                                job.wrap.max_width = 130.0;
+                                                for (i, tech) in jd.technologies.iter().enumerate()
+                                                {
+                                                    let color = match tech.to_lowercase().as_str() {
+                                                        "go" | "golang" => {
+                                                            Color32::from_rgb(0, 173, 216)
+                                                        }
+                                                        "rust" => Color32::from_rgb(183, 65, 14),
+                                                        "elixir" => Color32::from_rgb(142, 85, 184),
+                                                        "ruby" | "rails" => {
+                                                            Color32::from_rgb(204, 0, 0)
+                                                        }
+                                                        "python" => Color32::from_rgb(255, 212, 59),
+                                                        "typescript" => {
+                                                            Color32::from_rgb(49, 120, 198)
+                                                        }
+                                                        "react" => Color32::from_rgb(97, 218, 251),
+                                                        "java" => Color32::from_rgb(238, 20, 26),
+                                                        _ => ui.visuals().text_color(),
+                                                    };
+                                                    let text = if i == jd.technologies.len() - 1 {
+                                                        tech.to_string()
+                                                    } else {
+                                                        format!("{}, ", tech)
+                                                    };
+                                                    job.append(
+                                                        &text,
+                                                        0.0,
+                                                        egui::text::TextFormat {
+                                                            font_id: egui::FontId::proportional(
+                                                                TABLE_FONT_SIZE,
+                                                            ),
+                                                            color,
+                                                            ..Default::default()
+                                                        },
+                                                    );
+                                                }
+                                                ui.add(egui::Label::new(job).wrap());
+                                            });
+                                        }
+                                        if !jd.compensation_currency.is_empty()
+                                            && jd.compensation_currency != "null"
+                                        {
+                                            fn format_val(val: u64) -> String {
+                                                if val >= 1_000_000 {
+                                                    format!("{:.1}M", val as f64 / 1_000_000.0)
+                                                } else if val >= 1_000 {
+                                                    format!("{}k", val / 1_000)
+                                                } else {
+                                                    val.to_string()
+                                                }
+                                            }
+
+                                            let suff =
+                                                match (jd.compensation_min, jd.compensation_max) {
+                                                    (0, 0) => "".into(),
+                                                    (0, max) => format!("< {}", format_val(max)),
+                                                    (min, 0) => format!("> {}", format_val(min)),
+                                                    (min, max) => format!(
+                                                        "{} - {}",
+                                                        format_val(min),
+                                                        format_val(max)
+                                                    ),
+                                                };
+                                            if !suff.is_empty() {
+                                                ui.label(
+                                                    egui::RichText::new(format!(
+                                                        "Comp: {} {}",
+                                                        suff, jd.compensation_currency
+                                                    ))
+                                                    .size(TABLE_FONT_SIZE),
+                                                );
+                                            }
+                                        }
+                                    });
+                                }
                             });
                             // Comment
                             ui.table_cell(&cols, available_w, 1, |ui| {
                                 ui.vertical(|ui| {
                                     ui.hyperlink_to(
-                                        egui::RichText::new(format!("#{}", comment.id)).small(),
+                                        egui::RichText::new(format!("#{}", comment.id))
+                                            .size(TABLE_FONT_SIZE),
                                         format!(
                                             "https://news.ycombinator.com/item?id={}",
                                             comment.id
                                         ),
                                     );
-                                    scrollable_row(
-                                        ui,
-                                        format!("comment_{}", comment.id),
-                                        comment.text.as_deref().unwrap_or(""),
+                                    ui.allocate_ui_with_layout(
+                                        egui::vec2(ui.available_width(), ui.available_height()),
+                                        egui::Layout::top_down(egui::Align::Min),
+                                        |ui| {
+                                            egui::ScrollArea::vertical()
+                                                .id_salt(format!("comment_{}", comment.id))
+                                                .auto_shrink([false, true])
+                                                .show(ui, |ui| {
+                                                    let mut job = egui::text::LayoutJob::default();
+                                                    let text =
+                                                        comment.text.as_deref().unwrap_or("");
+                                                    let lines: Vec<&str> =
+                                                        text.splitn(2, '\n').collect();
+
+                                                    // Add first line
+                                                    if let Some(first_line) = lines.first() {
+                                                        job.append(
+                                                            &format!("{}\n", first_line),
+                                                            0.0,
+                                                            egui::text::TextFormat {
+                                                                font_id: egui::FontId::proportional(
+                                                                    TABLE_FONT_SIZE,
+                                                                ),
+                                                                color: ui.visuals().text_color(),
+                                                                line_height: Some(20.0),
+                                                                ..Default::default()
+                                                            },
+                                                        );
+                                                    }
+
+                                                    // Add Red Flags
+                                                    if let Some(jd) = eval
+                                                        .as_ref()
+                                                        .and_then(|e| e.job_description.as_ref())
+                                                        && !jd.red_flags.is_empty()
+                                                    {
+                                                        for flag in &jd.red_flags {
+                                                            job.append(
+                                                                &format!("• {}\n", flag),
+                                                                0.0,
+                                                                egui::text::TextFormat {
+                                                                    font_id:
+                                                                        egui::FontId::proportional(
+                                                                            TABLE_FONT_SIZE,
+                                                                        ),
+                                                                    color: egui::Color32::from_rgb(
+                                                                        201, 147, 58,
+                                                                    ),
+                                                                    line_height: Some(20.0),
+                                                                    ..Default::default()
+                                                                },
+                                                            );
+                                                        }
+                                                        job.append(
+                                                            "\n",
+                                                            0.0,
+                                                            egui::text::TextFormat::default(),
+                                                        );
+                                                    }
+
+                                                    // Add remaining lines
+                                                    if lines.len() > 1 {
+                                                        job.append(
+                                                            lines[1].trim_start(),
+                                                            0.0,
+                                                            egui::text::TextFormat {
+                                                                font_id: egui::FontId::proportional(
+                                                                    TABLE_FONT_SIZE,
+                                                                ),
+                                                                color: ui.visuals().text_color(),
+                                                                line_height: Some(20.0),
+                                                                ..Default::default()
+                                                            },
+                                                        );
+                                                    }
+
+                                                    job.wrap.max_width = ui.available_width();
+                                                    ui.add(egui::Label::new(job).wrap());
+                                                });
+                                        },
                                     );
                                 });
                             });
@@ -389,10 +628,12 @@ impl App {
                             ui.table_cell(&cols, available_w, 5, |ui| {
                                 ui.vertical_centered(|ui| {
                                     if let Some(e) = eval {
+                                        ui.add_space(10.0);
                                         ui.label(format!("{}", e.score));
+                                        add_meter(ui, e.score);
                                     } else {
                                         ui.centered_and_justified(|ui| ui.label("-"));
-                                    }
+                                    };
                                 });
                             });
 
@@ -401,130 +642,63 @@ impl App {
                                     available_w * cols[6] * 0.6,
                                     ui.spacing().interact_size.y,
                                 );
-                                let button = SizedButton::new(button_size, "Evaluate");
-                                let resp =
-                                    //ui.add_enabled(state.eval_cache.is_usable() || true, button);
-                                    ui.add_enabled(true, button);
 
-                                if resp.clicked() {
-                                    let _span = tracing::debug_span!("CLICK Evaluate").entered();
-                                    let state = state.clone();
-                                    let comment = comment.clone();
-                                    let requirements = state.requirements.clone();
-                                    let pdf_path = state.pdf_path.clone().unwrap_or_default();
-
-                                    for e in vec![
-                                        Event::Evaluate {
-                                            try_cache: true,
-                                            comment: comment.clone(),
-                                            requirements,
-                                            pdf_path,
-                                            permit: None,
-                                        },
-                                        Event::FetchJobDescription {
-                                            try_cache: true,
-                                            id: comment.id,
-                                            model: String::from(evaluation::MODEL),
-                                            input: comment.text.clone().unwrap_or_default(),
-                                            permit: None,
-                                        },
-                                    ] {
-                                        event!(self, e);
-                                    }
-                                };
                                 let flags = &mut event_state
                                     .flags
                                     .get(&comment.id)
                                     .copied()
                                     .unwrap_or_default();
 
-                                if flags.get_hide() {
-                                    let resp = ui.add(SizedButton::new(button_size, "Unhide"));
-                                    if resp.clicked() {
-                                        flags.set_hide(false);
-                                        event!(
-                                            self,
-                                            FlagEventUpdate {
-                                                id: comment.id,
-                                                flag: flags.clone(),
-                                            }
-                                        );
-                                    }
-                                } else {
-                                    let resp = ui.add(SizedButton::new(button_size, "Hide"));
-                                    if resp.clicked() {
-                                        flags.set_hide(true);
-                                        event!(
-                                            self,
-                                            FlagEventUpdate {
-                                                id: comment.id,
-                                                flag: flags.clone(),
-                                            }
-                                        );
-                                    }
-                                }
-                                if flags.get_seen() {
-                                    let resp =
-                                        ui.add(SizedButton::new(button_size, "Set not-seen"));
-                                    if resp.clicked() {
-                                        flags.set_seen(false);
+                                ui.add_space(10.0);
+                                seen_button(
+                                    &self.event_handler.tx,
+                                    button_size,
+                                    comment,
+                                    ui,
+                                    flags,
+                                );
+                                inprogress_button(
+                                    &self.event_handler.tx,
+                                    button_size,
+                                    comment,
+                                    ui,
+                                    flags,
+                                );
+                                hide_button(
+                                    &self.event_handler.tx,
+                                    button_size,
+                                    comment,
+                                    ui,
+                                    flags,
+                                );
 
-                                        event!(
-                                            self,
-                                            FlagEventUpdate {
-                                                id: comment.id,
-                                                flag: flags.clone(),
-                                            }
-                                        );
-                                    }
-                                } else {
-                                    let resp = ui.add(SizedButton::new(button_size, "Set seen"));
-                                    if resp.clicked() {
-                                        flags.set_seen(true);
-                                        event!(
-                                            self,
-                                            FlagEventUpdate {
-                                                id: comment.id,
-                                                flag: flags.clone(),
-                                            }
-                                        );
-                                    }
-                                }
-                                if flags.get_in_progress() {
-                                    let resp =
-                                        ui.add(SizedButton::new(button_size, "Not In Progress"));
-                                    if resp.clicked() {
-                                        flags.set_in_progress(false);
-                                        event!(
-                                            self,
-                                            FlagEventUpdate {
-                                                id: comment.id,
-                                                flag: flags.clone(),
-                                            }
-                                        );
-                                    }
-                                } else {
-                                    let resp = ui.add(SizedButton::new(button_size, "In Progress"));
-                                    if resp.clicked() {
-                                        flags.set_in_progress(true);
-                                        event!(
-                                            self,
-                                            FlagEventUpdate {
-                                                id: comment.id,
-                                                flag: flags.clone(),
-                                            }
-                                        );
-                                    }
-                                }
+                                ui.with_layout(
+                                    Layout::bottom_up(egui::Align::Min).with_cross_justify(true),
+                                    |ui| {
+                                        //ui.set_width(button_size.x);
+                                        // ui.painter().rect_filled(
+                                        //     ui.max_rect(),
+                                        //     0.0,
+                                        //     Color32::from_rgb(255, 0, 0),
+                                        // );
+                                        ui.add_space(10.0);
 
-                                if (&event_state.notify_data).notified(comment.id) {
-                                    let reset_notify_button =
-                                        SizedButton::new(button_size, "Remove Notify");
-                                    let resp = ui.add(reset_notify_button);
-                                    if resp.clicked() {
-                                        event!(self, RemoveNotify(comment.id));
-                                    }
-                                }
+                                        evaluate_button(
+                                            &self.event_handler.tx,
+                                            button_size,
+                                            &state,
+                                            comment,
+                                            ui,
+                                        );
+                                        remove_notify_button(
+                                            &self.event_handler.tx,
+                                            button_size,
+                                            &event_state,
+                                            comment,
+                                            ui,
+                                        );
+                                    },
+                                );
                             });
 
                             ui.end_row();
@@ -534,6 +708,167 @@ impl App {
     }
 }
 
+fn remove_notify_button(
+    tx: &tokio::sync::mpsc::Sender<EventEnvelope>,
+    button_size: egui::Vec2,
+    event_state: &events::State,
+    comment: &crate::models::Comment,
+    ui: &mut egui::Ui,
+) {
+    if (&event_state.notify_data).notified(comment.id) {
+        let reset_notify_button = SizedButton::new(button_size, "Remove Notify");
+        let resp = ui.add(reset_notify_button);
+        if resp.clicked() {
+            let _ = tx.try_send(EventEnvelope {
+                event: Event::RemoveNotify(comment.id),
+                span: tracing::Span::current(),
+            });
+        }
+    }
+}
+
+fn inprogress_button(
+    tx: &tokio::sync::mpsc::Sender<EventEnvelope>,
+    button_size: egui::Vec2,
+    comment: &crate::models::Comment,
+    ui: &mut egui::Ui,
+    flags: &mut Flags,
+) {
+    if flags.get_in_progress() {
+        let resp = ui.add(SizedButton::new(button_size, "Not In Progress"));
+        if resp.clicked() {
+            flags.set_in_progress(false);
+            let _ = tx.try_send(EventEnvelope {
+                event: Event::FlagEventUpdate {
+                    id: comment.id,
+                    flag: flags.clone(),
+                },
+                span: tracing::Span::current(),
+            });
+        }
+    } else {
+        let resp = ui.add(SizedButton::new(button_size, "In Progress"));
+        if resp.clicked() {
+            flags.set_in_progress(true);
+            let _ = tx.try_send(EventEnvelope {
+                event: Event::FlagEventUpdate {
+                    id: comment.id,
+                    flag: flags.clone(),
+                },
+                span: tracing::Span::current(),
+            });
+        }
+    }
+}
+
+fn seen_button(
+    tx: &tokio::sync::mpsc::Sender<EventEnvelope>,
+    button_size: egui::Vec2,
+    comment: &crate::models::Comment,
+    ui: &mut egui::Ui,
+    flags: &mut Flags,
+) {
+    if flags.get_seen() {
+        let resp = ui.add(SizedButton::new(button_size, "Set not-seen"));
+        if resp.clicked() {
+            flags.set_seen(false);
+
+            let _ = tx.try_send(EventEnvelope {
+                event: Event::FlagEventUpdate {
+                    id: comment.id,
+                    flag: flags.clone(),
+                },
+                span: tracing::Span::current(),
+            });
+        }
+    } else {
+        let resp = ui.add(SizedButton::new(button_size, "Set seen"));
+        if resp.clicked() {
+            flags.set_seen(true);
+            let _ = tx.try_send(EventEnvelope {
+                event: Event::FlagEventUpdate {
+                    id: comment.id,
+                    flag: flags.clone(),
+                },
+                span: tracing::Span::current(),
+            });
+        }
+    }
+}
+
+fn hide_button(
+    tx: &tokio::sync::mpsc::Sender<EventEnvelope>,
+    button_size: egui::Vec2,
+    comment: &crate::models::Comment,
+    ui: &mut egui::Ui,
+    flags: &mut Flags,
+) {
+    if flags.get_hide() {
+        let resp = ui.add(SizedButton::new(button_size, "Unhide"));
+        if resp.clicked() {
+            flags.set_hide(false);
+            let _ = tx.try_send(EventEnvelope {
+                event: Event::FlagEventUpdate {
+                    id: comment.id,
+                    flag: flags.clone(),
+                },
+                span: tracing::Span::current(),
+            });
+        }
+    } else {
+        let resp = ui.add(SizedButton::new(button_size, "Hide"));
+        if resp.clicked() {
+            flags.set_hide(true);
+            let _ = tx.try_send(EventEnvelope {
+                event: Event::FlagEventUpdate {
+                    id: comment.id,
+                    flag: flags.clone(),
+                },
+                span: tracing::Span::current(),
+            });
+        }
+    }
+}
+
+fn evaluate_button(
+    tx: &tokio::sync::mpsc::Sender<EventEnvelope>,
+    button_size: egui::Vec2,
+    state: &AppState,
+    comment: &crate::models::Comment,
+    ui: &mut egui::Ui,
+) {
+    let button = SizedButton::new(button_size, "Evaluate");
+    let resp = ui.add_enabled(true, button);
+    if resp.clicked() {
+        let _span = tracing::debug_span!("CLICK Evaluate").entered();
+        let state = state.clone();
+        let comment = comment.clone();
+        let requirements = state.requirements.clone();
+        let pdf_path = state.pdf_path.clone().unwrap_or_default();
+
+        for e in vec![
+            Event::Evaluate {
+                try_cache: true,
+                comment: comment.clone(),
+                requirements,
+                pdf_path,
+                permit: None,
+            },
+            Event::FetchJobDescription {
+                try_cache: true,
+                id: comment.id,
+                model: String::from(crate::models::MODEL),
+                input: comment.text.clone().unwrap_or_default(),
+                permit: None,
+            },
+        ] {
+            let _ = tx.try_send(EventEnvelope {
+                event: e,
+                span: tracing::Span::current(),
+            });
+        }
+    };
+}
 impl eframe::App for App {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         let state: AppState = self.state.read().clone();
@@ -595,7 +930,6 @@ impl eframe::App for App {
                         }
 
                         ui.horizontal(|ui| {
-                            ui.label("Auto fetch comments");
                             if toggle_ui(ui, &mut state.auto_fetch).changed() {
                                 if state.auto_fetch {
                                     let url = state.hn_url.clone();
@@ -604,10 +938,26 @@ impl eframe::App for App {
                                     event!(self, AutoFetchStop);
                                 }
                             }
+                            ui.label("Auto fetch comments");
+                        });
+                        ui.horizontal(|ui| {
+                            if toggle_ui(ui, &mut state.batch_processing).changed() {
+                                if state.batch_processing {
+                                    event!(
+                                        self,
+                                        BatchProcessingStart {
+                                            requirements: state.requirements.clone(),
+                                            pdf_path: state.pdf_path.clone().unwrap_or_default(),
+                                        }
+                                    );
+                                } else {
+                                    event!(self, BatchProcessingStop);
+                                }
+                            }
+                            ui.label("Batch process");
                         });
 
                         ui.horizontal(|ui| {
-                            ui.label("Notifications");
                             if toggle_ui(ui, &mut state.notifications_enabled).changed() {
                                 if state.notifications_enabled {
                                     event!(self, SetNotifications { enabled: true });
@@ -615,6 +965,7 @@ impl eframe::App for App {
                                     event!(self, SetNotifications { enabled: false });
                                 }
                             }
+                            ui.label("Notifications");
                         });
 
                         if estate.processing.enabled {
@@ -679,22 +1030,6 @@ impl eframe::App for App {
                                             url: state.hn_url.clone()
                                         }
                                     );
-                                }
-                                if ui.button("Batch Process").clicked() {
-                                    state.batch_processing = !state.batch_processing;
-                                    if state.batch_processing
-                                        && let Some(pdf_path) = state.pdf_path.clone()
-                                    {
-                                        event!(
-                                            self,
-                                            BatchProcessingStart(
-                                                state.requirements.clone(),
-                                                pdf_path,
-                                            )
-                                        );
-                                    } else {
-                                        event!(self, BatchProcessingStop);
-                                    }
                                 }
                                 if ui.button("Nuke Evaluations").clicked() {
                                     event!(self, RemoveEvaluationAll);

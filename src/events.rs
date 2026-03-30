@@ -16,26 +16,32 @@ use tokio::sync::{
 use tracing::{Instrument as _, instrument};
 
 use crate::{
-    autofetcher::AutoFetcher,
-    batch_processor::BatchProcessor,
-    comments::{self, Comment},
+    backend::app_service::{self, AppService},
+    backend::{
+        self,
+        autofetcher::AutoFetcher,
+        batch_processor::BatchProcessor,
+        comments::Comment,
+        evaluation::{Evaluation, EvaluationCache},
+        job_description::JobDescription,
+        notify::NotifyData,
+    },
     common_gui::{Flags, ProcessingData},
-    evaluation::{self, Evaluation, Usable},
-    job_description::{self, JobDescriptions},
-    notify::{self, NotifyData},
+    models::Usable as _,
 };
 
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct State {
     pub hydrated: bool,
+    #[serde(skip)]
     pub auto_fetcher: AutoFetcher,
     pub batch_processor: BatchProcessor,
     pub cache_key_error: Option<String>,
     pub evaluations: HashMap<u32, Evaluation>,
     pub comments: Vec<Comment>,
-    pub job_descriptions: HashMap<u32, job_description::JobDescription>,
+    pub job_descriptions: HashMap<u32, JobDescription>,
     pub notify_data: NotifyData,
-    pub eval_cache: Option<evaluation::EvaluationCache>,
+    pub eval_cache: Option<EvaluationCache>,
     pub flags: HashMap<u32, Flags>,
     pub processing: ProcessingData,
     pub api_key: Arc<str>,
@@ -62,7 +68,7 @@ pub struct Barrier {
 pub enum Event {
     AutoFetchStart(String),
     AutoFetchStop,
-    BatchProcessingStart(String, String),
+    BatchProcessingStart{requirements: String, pdf_path: String},
     BatchProcessingStop,
     CommentsUpdate{ comments: Vec<Comment> },
     Evaluate { try_cache: bool, comment: Comment, requirements: String, pdf_path: String, #[serde(skip)] permit: Option<Arc<OwnedSemaphorePermit>> },
@@ -109,6 +115,7 @@ pub struct EventHandler {
     pub state: Arc<RwLock<State>>,
     pub tx: Sender<EventEnvelope>,
     pub api_semaphore: Arc<Semaphore>,
+    pub app_service: Arc<dyn AppService>,
 }
 impl EventHandler {
     pub fn new(state: State) -> Self {
@@ -119,6 +126,7 @@ impl EventHandler {
             state: arw_state,
             api_semaphore: new_api_semaphore(),
             tx,
+            app_service: Arc::new(app_service::AppServiceDefault),
         }
     }
     pub fn spawn(state: Arc<RwLock<State>>) -> Sender<EventEnvelope> {
@@ -127,6 +135,7 @@ impl EventHandler {
             state,
             api_semaphore: new_api_semaphore(),
             tx: tx.clone(),
+            app_service: Arc::new(app_service::AppServiceDefault),
         };
 
         tokio::spawn(async move {
@@ -166,7 +175,7 @@ impl EventHandler {
         match env.event {
             AutoFetchStart(_)=>self.process_auto_fetch_start(env,queue),
             AutoFetchStop=>self.process_auto_fetch_stop(env,queue),
-            BatchProcessingStart(..)=>self.process_batch_processing_start(env,queue),
+            BatchProcessingStart{..}=>self.process_batch_processing_start(env,queue),
             BatchProcessingStop=>self.process_batch_processing_stop(env,queue),
             CommentsProcess{..} => self.process_comments(env, queue),
             CommentsUpdate{..}=>self.process_comments_update(env,queue),
@@ -200,7 +209,7 @@ impl EventHandler {
         env: EventEnvelope,
         queue: &mut VecDeque<EventEnvelope>,
     ) {
-        ev_guard!(env => BatchProcessingStart(requirements, pdf_path));
+        ev_guard!(env => BatchProcessingStart{requirements, pdf_path});
 
         self.state.write().batch_processor.enable(
             self.api_semaphore.clone(),
@@ -224,10 +233,14 @@ impl EventHandler {
     fn process_comments(&self, env: EventEnvelope, queue: &mut VecDeque<EventEnvelope>) {
         ev_guard!(env => CommentsProcess { url } );
         let tx = self.tx.clone();
+        let span = env.span.clone();
+        let app_service = self.app_service.clone();
+
         tokio::task::spawn(
             async move {
-                let comments = comments::get_comments_from_url(&url, true)
-                    .instrument(tracing::info_span!("comments_update_loop"))
+                let comments = app_service
+                    .get_comments_from_url(&url, true)
+                    .instrument(tracing::info_span!(parent: &span, "comments_update_loop"))
                     .await;
                 let _ = tx
                     .send(EventEnvelope {
@@ -300,6 +313,7 @@ impl EventHandler {
         ev_guard!(env => Notify { id });
         if !self.state.read().notifications {
             self.state.write().notify_data.mark_notified(id);
+            return;
         }
         let evaluation = self.state.read().evaluations.get(&id).cloned();
         let state = self.state.clone();
@@ -349,14 +363,16 @@ impl EventHandler {
         let api_key = self.state.read().api_key.clone();
         let tx = self.tx.clone();
         let state = self.state.clone();
+        let app_service = self.app_service.clone();
         tokio::spawn(async move {
             let path = PathBuf::from(pdf_path);
             let ttl = Duration::from_hours(24);
-            let result =
-                evaluation::create_evaluation_cache(&api_key, &path, &requirements, ttl).await;
+            let result = app_service
+                .create_evaluation_cache(&api_key, &path, &requirements, ttl)
+                .await;
             match result {
                 Ok(cache_key) => {
-                    let cache = evaluation::EvaluationCache {
+                    let cache = EvaluationCache {
                         key: cache_key,
                         timestamp: chrono::Utc::now(),
                         ttl,
@@ -395,6 +411,7 @@ impl EventHandler {
             state.job_descriptions.get(&comment_id).cloned(),
         ) {
             ev.job_description = Some(jd);
+            state.evaluations.insert(comment_id, ev);
             // Remove the barrier as it is now satisfied
             if let Some(barriers) = state.barriers.get_mut(&comment_id) {
                 barriers.retain(|b| b.name != "enrich_evaluation_with_jd");
@@ -425,16 +442,18 @@ impl EventHandler {
         let api_key = self.state.read().api_key.to_string().clone();
         let state = self.state.clone();
         let tx = self.tx.clone();
+        let app_service = self.app_service.clone();
 
         tokio::spawn(async move {
             let permit = permit;
             for _ in 0..3 {
+                let app_service = app_service.clone();
                 //let job_result = state.write().job_descriptions.get(id, &input, &api_key);
 
                 let input = input.clone();
                 let llm_config = llm_config.clone();
                 let job_result = tokio::task::spawn_blocking(move || {
-                    job_description::parse_job_description(llm_config, &input)
+                    app_service.parse_job_description(llm_config, &input)
                 })
                 .await;
 
@@ -527,41 +546,46 @@ impl EventHandler {
             let api_key = self.state.read().api_key.to_string();
             let tx = self.tx.clone();
             let state = self.state.clone();
+            let app_service = Arc::clone(&self.app_service);
             // Process async
-            tokio::spawn(async move {
-                let result =
-                    evaluation::evaluate_comment_cached(&comment, &eval_cache, &api_key).await;
-                match result {
-                    Ok(ev) => {
-                        {
-                            let mut state = state.write();
-                            state.evaluations.insert(comment.id, ev);
+            tokio::spawn(
+                async move {
+                    let result = app_service
+                        .evaluate_comment_cached(&comment, &eval_cache, &api_key)
+                        .await;
+                    match result {
+                        Ok(ev) => {
+                            {
+                                let mut state = state.write();
+                                state.evaluations.insert(comment.id, ev);
+                            }
+                            let _ = tx
+                                .send(EventEnvelope {
+                                    event: Event::Signal(comment.id, BarrierData::Evaluation),
+                                    span: tracing::info_span!("signal_evaluation"),
+                                })
+                                .await;
                         }
-                        let _ = tx
-                            .send(EventEnvelope {
-                                event: Event::Signal(comment.id, BarrierData::Evaluation),
-                                span: tracing::info_span!("signal_evaluation"),
-                            })
-                            .await;
-                    }
-                    Err(err) => {
-                        tracing::error!("Evaluation failed: {}", err);
-                        let _ = tx
-                            .send(EventEnvelope {
-                                event: Event::EvaluateTry {
-                                    try_cache,
-                                    comment,
-                                    requirements,
-                                    pdf_path,
-                                    retry: retry + 1,
-                                    permit,
-                                },
-                                span: tracing::info_span!("retry_evaluate"),
-                            })
-                            .await;
-                    }
-                };
-            });
+                        Err(err) => {
+                            tracing::error!("Evaluation failed: {}", err);
+                            let _ = tx
+                                .send(EventEnvelope {
+                                    event: Event::EvaluateTry {
+                                        try_cache,
+                                        comment,
+                                        requirements,
+                                        pdf_path,
+                                        retry: retry + 1,
+                                        permit,
+                                    },
+                                    span: tracing::info_span!("retry_evaluate"),
+                                })
+                                .await;
+                        }
+                    };
+                }
+                .instrument(tracing::info_span!(parent: &env.span, "request")),
+            );
         }
     }
 }
@@ -586,12 +610,13 @@ impl Default for EventHandler {
         Self {
             state: Arc::new(RwLock::new(State::default())),
             api_semaphore: new_api_semaphore(),
+            app_service: Arc::new(app_service::AppServiceDefault),
             tx,
         }
     }
 }
 pub fn new_api_semaphore() -> Arc<Semaphore> {
-    Arc::new(Semaphore::new(1))
+    Arc::new(Semaphore::new(5))
 }
 #[tracing::instrument(skip(state, tx))]
 pub fn insert_jd_evaluation_barrier(state: &mut State, tx: Sender<EventEnvelope>, id: u32) {

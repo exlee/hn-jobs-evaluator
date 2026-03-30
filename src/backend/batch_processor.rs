@@ -9,7 +9,7 @@ use tokio::{
 use tracing::Instrument as _;
 
 use crate::{
-    evaluation::MODEL,
+    backend::evaluation::MODEL,
     events::{self, Event, EventEnvelope},
 };
 
@@ -49,14 +49,15 @@ impl BatchProcessor {
                                                 try_cache: true,
                                                 id: comment.id,
                                                 model: String::from(MODEL),
-                                                input: comment.text.unwrap().clone(),
+                                                input: comment.clone().text.unwrap(),
                                                 permit: Some(permit.clone()),
                                             },
                                             span: tracing::info_span!("job_description"),
                                         })
                                         .await;
+                                } else {
+                                    continue;
                                 }
-                                continue;
                             }
                             let _ = tx
                                 .send(EventEnvelope {

@@ -16,7 +16,7 @@ pub struct Comment {
 
 const MAX_CACHE_AGE: Duration = Duration::from_secs(15 * 60);
 
-pub async fn get_comments(item_id: u32, force: bool) -> Vec<Comment> {
+pub(in crate::backend) async fn get_comments(item_id: u32, force: bool) -> Vec<Comment> {
     let cache_path = format!("cache_{}.json", item_id);
     if !force {
         if let Ok(metadata) = fs::metadata(&cache_path) {
@@ -44,7 +44,7 @@ pub async fn get_comments(item_id: u32, force: bool) -> Vec<Comment> {
     fs::write(cache_path, serde_json::to_string(&comments).unwrap()).unwrap();
     comments
 }
-pub async fn get_comments_from_url(url: &str, force: bool) -> Vec<Comment> {
+pub(in crate::backend) async fn get_comments_from_url(url: &str, force: bool) -> Vec<Comment> {
     let item_id = parse_item_id(&url);
     let comments = get_comments(item_id, force).await;
     let comments = filter_top_level(&comments, item_id);
@@ -52,7 +52,11 @@ pub async fn get_comments_from_url(url: &str, force: bool) -> Vec<Comment> {
     comments
 }
 
-pub fn flatten_comments(node: &serde_json::Value, parent_id: u32, acc: &mut Vec<Comment>) {
+pub(in crate::backend) fn flatten_comments(
+    node: &serde_json::Value,
+    parent_id: u32,
+    acc: &mut Vec<Comment>,
+) {
     if let Some(children) = node.as_array() {
         for child in children {
             let id = child["id"].as_u64().unwrap() as u32;
@@ -77,7 +81,7 @@ pub fn flatten_comments(node: &serde_json::Value, parent_id: u32, acc: &mut Vec<
         }
     }
 }
-pub fn clean_html(html: &str) -> String {
+pub(in crate::backend) fn clean_html(html: &str) -> String {
     let fragment = scraper::Html::parse_fragment(html);
 
     fragment
@@ -95,7 +99,10 @@ pub fn clean_html(html: &str) -> String {
         .collect::<Vec<_>>()
         .join("\n\n")
 }
-pub fn filter_top_level(comments: &[Comment], thread_root_id: u32) -> Vec<&Comment> {
+pub(in crate::backend) fn filter_top_level(
+    comments: &[Comment],
+    thread_root_id: u32,
+) -> Vec<&Comment> {
     comments
         .iter()
         .filter(|c| c.parent == thread_root_id)
@@ -103,7 +110,7 @@ pub fn filter_top_level(comments: &[Comment], thread_root_id: u32) -> Vec<&Comme
         .collect()
 }
 
-pub fn parse_item_id(url: &str) -> u32 {
+pub(in crate::backend) fn parse_item_id(url: &str) -> u32 {
     let parsed = Url::parse(url).unwrap();
     parsed
         .query_pairs()

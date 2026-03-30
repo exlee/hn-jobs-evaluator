@@ -1,7 +1,8 @@
-use jobs::job_description;
+use jobs::models::{AppService, AppServiceDefault};
 
 const MODEL: &str = "gemini-3.1-flash-lite-preview";
 fn main() {
+    let app_service = AppServiceDefault {};
     let api_key = std::env::var("GOOGLE_API_KEY").expect("GOOGLE_API_KEY must be set");
     let llm_config = llmuxer::LlmConfig {
         provider: llmuxer::Provider::Gemini,
@@ -16,7 +17,7 @@ fn main() {
         panic!("Clipboard content must have at least 3 words");
     }
 
-    match job_description::parse_job_description(llm_config, &input) {
+    match app_service.parse_job_description(llm_config, &input) {
         Ok(job) => {
             println!("Parsed Job Description:");
             println!("Company: {}", job.company_name);

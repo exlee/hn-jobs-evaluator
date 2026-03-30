@@ -3,16 +3,18 @@ use std::collections::HashMap;
 use opentelemetry_otlp::WithHttpConfig as _;
 use tokio;
 
-mod appstate_evaluation;
-mod autofetcher;
-mod batch_processor;
-mod comments;
-mod common_gui;
-mod evaluation;
-mod events;
-mod gui;
-mod job_description;
-mod notify;
+use jobs::*;
+// mod app_service;
+// mod appstate_evaluation;
+// mod autofetcher;
+// mod batch_processor;
+// mod comments;
+// mod common_gui;
+// mod evaluation;
+// mod events;
+// mod gui;
+// mod job_description;
+// mod notify;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
