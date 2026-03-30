@@ -113,38 +113,43 @@ macro_rules! ev_guard {
 }
 pub struct EventHandler {
     pub state: Arc<RwLock<State>>,
-    pub tx: Sender<EventEnvelope>,
+    pub tx: Arc<RwLock<Sender<EventEnvelope>>>,
     pub api_semaphore: Arc<Semaphore>,
     pub app_service: Arc<dyn AppService>,
 }
 impl EventHandler {
-    pub fn new(state: State, app_service: Arc<dyn AppService>) -> Self {
+    pub fn sender(&self) -> mpsc::Sender<EventEnvelope> {
+        self.tx.read().clone()
+    }
+    pub fn new(state: State, app_service: Arc<dyn AppService>) -> Arc<Self> {
         let arw_state = Arc::new(RwLock::new(state));
         tracing::debug!("spawning handler");
-        let tx = Self::spawn(arw_state.clone(), app_service.clone());
-        Self {
-            state: arw_state,
-            api_semaphore: new_api_semaphore(),
-            tx,
-            app_service,
-        }
+        let eha = Self::spawn(arw_state.clone(), app_service.clone());
+        eha
     }
-    pub fn spawn(state: Arc<RwLock<State>>, app_service: Arc<dyn AppService>) -> Sender<EventEnvelope> {
+    pub async fn send(&self, env: EventEnvelope) {
+        self.tx.read().send(env).await;
+    }
+    pub fn spawn(state: Arc<RwLock<State>>, app_service: Arc<dyn AppService>) -> Arc<Self> {
         let (tx, rx) = mpsc::channel(100);
-        let event_handler = Self {
+        let event_handler_str = Self {
             state,
             api_semaphore: new_api_semaphore(),
-            tx: tx.clone(),
-            app_service: Arc::new(app_service::AppServiceDefault),
+            tx: Arc::new(RwLock::new(tx.clone())),
+            app_service: app_service,
         };
+        let event_handler = Arc::new(event_handler_str);
 
-        tokio::spawn(async move {
-            tracing::debug!("pre handler run");
-            event_handler.run(rx).await;
-            tracing::debug!("post handler run");
-        });
+        {
+            let event_handler = event_handler.clone();
+            tokio::spawn(async move {
+                tracing::debug!("pre handler run");
+                event_handler.run(rx).await;
+                tracing::debug!("post handler run");
+            });
+        }
 
-        tx
+        event_handler
     }
     async fn run(&self, mut rx: mpsc::Receiver<EventEnvelope>) {
         let mut queue: VecDeque<EventEnvelope> = VecDeque::new();
@@ -154,7 +159,7 @@ impl EventHandler {
                 Some(envelope) => queue.push_back(envelope),
                 None => {
                     tracing::error!("event channel closed unexpectedly");
-                    continue;
+                    break;
                 }
             }
 
@@ -163,6 +168,7 @@ impl EventHandler {
             }
 
             while let Some(envelope) = queue.pop_front() {
+                dbg!(&envelope.event);
                 self.handle(envelope, &mut queue).await;
             }
         }
@@ -196,7 +202,7 @@ impl EventHandler {
     #[tracing::instrument(skip_all, parent=&env.span)]
     fn process_auto_fetch_start(&self, env: EventEnvelope, _queue: &mut VecDeque<EventEnvelope>) {
         ev_guard!(env => AutoFetchStart(url));
-        self.state.write().auto_fetcher.enable(url, self.tx.clone());
+        self.state.write().auto_fetcher.enable(url, self.sender());
     }
     #[tracing::instrument(skip_all, parent=&env.span)]
     fn process_auto_fetch_stop(&self, env: EventEnvelope, _queue: &mut VecDeque<EventEnvelope>) {
@@ -210,7 +216,7 @@ impl EventHandler {
         self.state.write().batch_processor.enable(
             self.api_semaphore.clone(),
             self.state.clone(),
-            self.tx.clone(),
+            self.sender(),
             requirements,
             pdf_path,
         );
@@ -224,7 +230,7 @@ impl EventHandler {
     #[tracing::instrument(skip_all, parent=&env.span)]
     fn process_comments(&self, env: EventEnvelope, queue: &mut VecDeque<EventEnvelope>) {
         ev_guard!(env => CommentsProcess { url } );
-        let tx = self.tx.clone();
+        let tx = self.sender();
         let span = env.span.clone();
         let app_service = self.app_service.clone();
 
@@ -327,22 +333,26 @@ impl EventHandler {
             let _span = tracing::debug_span!("Create barrier").entered();
             let mut state = self.state.write();
             tracing::debug!("pre create");
-            insert_jd_evaluation_barrier(&mut state, self.tx.clone(), comment.id);
+            insert_jd_evaluation_barrier(&mut state, self.sender(), comment.id);
         }
         if try_cache && let Some(ev) = self.state.read().evaluations.get(&comment.id) {
             tracing::debug!("Found cached Evaluation: {}", comment.id);
             return;
         }
-        queue.push_front(EventEnvelope {
-            event: Event::EvaluateTry {
-                try_cache,
-                comment,
-                requirements,
-                pdf_path,
-                permit,
-                retry: 1,
-            },
-            span: tracing::info_span!("EvaluateTry"),
+        let tx = self.sender();
+        tokio::task::spawn(async move {
+            tx.send(EventEnvelope {
+                event: Event::EvaluateTry {
+                    try_cache,
+                    comment,
+                    requirements,
+                    pdf_path,
+                    permit,
+                    retry: 1,
+                },
+                span: tracing::info_span!("EvaluateTry"),
+            })
+            .await;
         });
     }
     #[tracing::instrument(skip_all, parent=&env.span)]
@@ -350,7 +360,7 @@ impl EventHandler {
         ev_guard!(env => EvaluationCacheFetch { requirements, pdf_path, then });
 
         let api_key = self.state.read().api_key.clone();
-        let tx = self.tx.clone();
+        let tx = self.sender();
         let state = self.state.clone();
         let app_service = self.app_service.clone();
         tokio::spawn(async move {
@@ -408,7 +418,7 @@ impl EventHandler {
         ev_guard!(env => FetchJobDescription { id, model, input, try_cache, permit});
         {
             let mut state = self.state.write();
-            insert_jd_evaluation_barrier(&mut state, self.tx.clone(), id);
+            insert_jd_evaluation_barrier(&mut state, self.sender(), id);
         }
         let llm_config = llmuxer::LlmConfig {
             provider: llmuxer::Provider::Gemini,
@@ -422,7 +432,7 @@ impl EventHandler {
         }
         let api_key = self.state.read().api_key.to_string().clone();
         let state = self.state.clone();
-        let tx = self.tx.clone();
+        let tx = self.sender();
         let app_service = self.app_service.clone();
 
         tokio::spawn(async move {
@@ -519,7 +529,7 @@ impl EventHandler {
             // EvalCache Available, processing with retry
             let eval_cache = self.state.read().eval_cache.clone().unwrap();
             let api_key = self.state.read().api_key.to_string();
-            let tx = self.tx.clone();
+            let tx = self.sender();
             let state = self.state.clone();
             let app_service = Arc::clone(&self.app_service);
             // Process async
@@ -576,7 +586,13 @@ impl<'de> Deserialize<'de> for EventHandler {
         D: serde::Deserializer<'de>,
     {
         let state = State::deserialize(deserializer)?;
-        Ok(EventHandler::new(state, Arc::new(AppServiceDefault {})))
+
+        let arc_eh = EventHandler::new(state, Arc::new(AppServiceDefault {}));
+        if let Ok(eh) = Arc::try_unwrap(arc_eh) {
+            Ok(eh)
+        } else {
+            Err(serde::de::Error::custom("can't unwrap arc"))
+        }
     }
 }
 impl Default for EventHandler {
@@ -586,7 +602,7 @@ impl Default for EventHandler {
             state: Arc::new(RwLock::new(State::default())),
             api_semaphore: new_api_semaphore(),
             app_service: Arc::new(app_service::AppServiceDefault),
-            tx,
+            tx: Arc::new(RwLock::new(tx)),
         }
     }
 }

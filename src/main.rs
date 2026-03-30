@@ -45,6 +45,7 @@ fn deadlock_detection() {
         }
     });
 }
+
 use opentelemetry::KeyValue;
 use opentelemetry::global;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;

@@ -12,6 +12,9 @@ use chrono::Utc;
 
 #[macro_export]
 macro_rules! async_res {
+    ($lt:lifetime, $out:ty) => {
+        std::pin::Pin<Box<dyn std::future::Future<Output = $out> + Send + $lt>>
+    };
     ($out:ty) => {
         std::pin::Pin<Box<dyn std::future::Future<Output = $out> + Send + '_>>
     };

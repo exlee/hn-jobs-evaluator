@@ -279,7 +279,7 @@ pub fn app_new(_cc: &eframe::CreationContext<'_>) -> gui::App {
         ..Default::default()
     };
     gui::App {
-        event_handler: Arc::new(event_handler),
+        event_handler: event_handler,
         state: Arc::new(RwLock::new(state)),
     }
 }

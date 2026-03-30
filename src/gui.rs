@@ -22,7 +22,7 @@ macro_rules! event {
     ($self:expr, $e:expr) => {
         #[allow(unused)]
         use Event::*;
-        let _ = $self.event_handler.tx.try_send(EventEnvelope {
+        let _ = $self.event_handler.sender().try_send(EventEnvelope {
             event: $e,
             span: tracing::Span::current(),
         });
@@ -195,7 +195,7 @@ impl App {
         //let event_state = events::State::hydrate_event_state(&state_rwlock);
         let state = Arc::new(RwLock::new(state_rwlock.clone()));
 
-        let event_handler = Arc::new(events::EventHandler::new(event_state, Arc::new(AppServiceDefault {})));
+        let event_handler = events::EventHandler::new(event_state, Arc::new(AppServiceDefault {}));
 
         Self { event_handler, state }
     }
@@ -575,9 +575,9 @@ impl App {
                                 let flags = &mut event_state.flags.get(&comment.id).copied().unwrap_or_default();
 
                                 ui.add_space(10.0);
-                                seen_button(&self.event_handler.tx, button_size, comment, ui, flags);
-                                inprogress_button(&self.event_handler.tx, button_size, comment, ui, flags);
-                                hide_button(&self.event_handler.tx, button_size, comment, ui, flags);
+                                seen_button(&self.event_handler.sender(), button_size, comment, ui, flags);
+                                inprogress_button(&self.event_handler.sender(), button_size, comment, ui, flags);
+                                hide_button(&self.event_handler.sender(), button_size, comment, ui, flags);
 
                                 ui.with_layout(Layout::bottom_up(egui::Align::Min).with_cross_justify(true), |ui| {
                                     //ui.set_width(button_size.x);
@@ -588,9 +588,9 @@ impl App {
                                     // );
                                     ui.add_space(10.0);
 
-                                    evaluate_button(&self.event_handler.tx, button_size, &state, comment, ui);
+                                    evaluate_button(&self.event_handler.sender(), button_size, &state, comment, ui);
                                     remove_notify_button(
-                                        &self.event_handler.tx,
+                                        &self.event_handler.sender(),
                                         button_size,
                                         &event_state,
                                         comment,

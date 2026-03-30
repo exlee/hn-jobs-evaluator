@@ -34,3 +34,6 @@ pub mod models {
     pub use crate::backend::evaluation::{Evaluation, EvaluationCache, MODEL, Usable};
     pub use crate::backend::job_description::{JobDescription, JobDescriptions};
 }
+
+#[cfg(test)]
+mod tests;
