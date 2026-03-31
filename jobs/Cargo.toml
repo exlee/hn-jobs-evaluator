@@ -15,6 +15,7 @@ path = "src/bin/jobparse.rs"
 # crate-type = ["rlib"]
 
 [dependencies]
+event_macros = { path = "../event_macros" }
 base64 = "0.22.1"
 chrono = { version = "0.4.44", features = ["serde"] }
 eframe = { version = "0.33.3", features = ["persistence"] }

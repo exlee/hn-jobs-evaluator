@@ -618,7 +618,7 @@ fn remove_notify_button(
         let resp = ui.add(reset_notify_button);
         if resp.clicked() {
             let _ = tx.try_send(EventEnvelope {
-                event: Event::RemoveNotify(comment.id),
+                event: Event::RemoveNotify { id: comment.id },
                 span: tracing::Span::current(),
             });
         }
@@ -843,7 +843,7 @@ impl eframe::App for App {
                             if toggle_ui(ui, &mut state.auto_fetch).changed() {
                                 if state.auto_fetch {
                                     let url = state.hn_url.clone();
-                                    event!(self, AutoFetchStart(url));
+                                    event!(self, AutoFetchStart { url });
                                 } else {
                                     event!(self, AutoFetchStop);
                                 }
@@ -996,7 +996,12 @@ impl App {
             && let Some(event_state) = self.event_handler.state.try_read()
             && state.api_key != event_state.api_key.to_string()
         {
-            event!(self, SyncApiKey(state.api_key.clone()));
+            event!(
+                self,
+                SyncApiKey {
+                    key: state.api_key.clone()
+                }
+            );
         }
     }
 }

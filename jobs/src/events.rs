@@ -65,9 +65,10 @@ pub struct Barrier {
 }
 // Delete Evaluations
 
-#[derive(Serialize, Deserialize, Clone )]
-#[rustfmt::skip]
-#[derive(strum::IntoStaticStr)]
+// #[derive(Serialize, Deserialize, Clone )]
+// #[rustfmt::skip]
+// #[derive(strum::IntoStaticStr)]
+/*
 pub enum Event {
     AutoFetchStart(String),
     AutoFetchStop,
@@ -91,6 +92,7 @@ pub enum Event {
     FrontPageProcessingStart,
     FrontPageProcessingEnd,
 }
+*/
 pub struct EventEnvelope {
     pub event: Event,
     pub span: tracing::Span,
@@ -123,6 +125,7 @@ pub struct EventHandler {
     pub api_semaphore: Arc<Semaphore>,
     pub app_service: Arc<dyn AppService>,
 }
+#[event_macros::event_processor]
 impl EventHandler {
     pub fn sender(&self) -> mpsc::Sender<EventEnvelope> {
         self.tx.read().clone()
@@ -179,49 +182,49 @@ impl EventHandler {
             }
         }
     }
-    #[rustfmt::skip]
-    #[tracing::instrument(skip_all, parent=&env.span)]
-    async fn handle(&self, env: EventEnvelope, queue: &mut VecDeque<EventEnvelope>) {
-        use Event::*;
-        tracing::debug!("handle: {:?}", env.event);
-        match env.event {
-            AutoFetchStart(_)=>self.process_auto_fetch_start(env,queue),
-            AutoFetchStop=>self.process_auto_fetch_stop(env,queue),
-            BatchProcessingStart{..}=>self.process_batch_processing_start(env,queue),
-            BatchProcessingStop=>self.process_batch_processing_stop(env,queue),
-            CommentsProcess{..}=>self.process_comments(env,queue),
-            CommentsUpdate{..}=>self.process_comments_update(env,queue),
-            EvaluateTry{..}=>self.process_evaluate_try(env,queue),
-            Evaluate{..}=>self.process_evaluate(env,queue),
-            EvaluationCacheFetch{..}=>self.process_evaluate_cache_fetch(env,queue),
-            EvaluationEnrichWithJd{..}=>self.process_evaluate_enrich_with_jd(env,queue),
-            FetchJobDescription{..}=>self.process_job_description_fetch(env,queue),
-            FlagEventUpdate{..}=>self.process_flag_update(env,queue),
-            Notify{..}=>self.process_notify(env,queue),
-            RemoveEvaluationAll=>self.process_remove_evaluation_all(env,queue),
-            RemoveNotify(_)=>self.process_remove_notify(env,queue),
-            SetNotifications{enabled}=>self.state.write().notifications=enabled,
-            Signal(..)=>self.process_signal(env,queue),
-            SyncApiKey(_)=>self.process_sync_apikey(env,queue),
-            FrontPageUpdate { .. } => self.process_front_page_update(env, queue),
-            FrontPageProcessingStart => self.process_front_page_processing_start(env, queue),
-            FrontPageProcessingEnd => self.process_front_page_processing_end(env, queue),
-        }
+    // #[rustfmt::skip]
+    // #[tracing::instrument(skip_all, parent=&env.span)]
+    // async fn handle(&self, env: EventEnvelope, queue: &mut VecDeque<EventEnvelope>) {
+    //     use Event::*;
+    //     tracing::debug!("handle: {:?}", env.event);
+    //     match env.event {
+    //         AutoFetchStart(_)=>self.process_auto_fetch_start(env,queue),
+    //         AutoFetchStop=>self.process_auto_fetch_stop(env,queue),
+    //         BatchProcessingStart{..}=>self.process_batch_processing_start(env,queue),
+    //         BatchProcessingStop=>self.process_batch_processing_stop(env,queue),
+    //         CommentsProcess{..}=>self.process_comments(env,queue),
+    //         CommentsUpdate{..}=>self.process_comments_update(env,queue),
+    //         EvaluateTry{..}=>self.process_evaluate_try(env,queue),
+    //         Evaluate{..}=>self.process_evaluate(env,queue),
+    //         EvaluationCacheFetch{..}=>self.process_evaluate_cache_fetch(env,queue),
+    //         EvaluationEnrichWithJd{..}=>self.process_evaluate_enrich_with_jd(env,queue),
+    //         FetchJobDescription{..}=>self.process_job_description_fetch(env,queue),
+    //         FlagEventUpdate{..}=>self.process_flag_update(env,queue),
+    //         Notify{..}=>self.process_notify(env,queue),
+    //         RemoveEvaluationAll=>self.process_remove_evaluation_all(env,queue),
+    //         RemoveNotify(_)=>self.process_remove_notify(env,queue),
+    //         SetNotifications{enabled}=>self.state.write().notifications=enabled,
+    //         Signal(..)=>self.process_signal(env,queue),
+    //         SyncApiKey(_)=>self.process_sync_apikey(env,queue),
+    //         FrontPageUpdate { .. } => self.process_front_page_update(env, queue),
+    //         FrontPageProcessingStart => self.process_front_page_processing_start(env, queue),
+    //         FrontPageProcessingEnd => self.process_front_page_processing_end(env, queue),
+    //     }
+    // }
+    #[handler(SetNotifications)]
+    fn process_set_notifications(&self, enabled: bool) {
+        self.state.write().notifications = enabled;
     }
-    #[tracing::instrument(skip_all, parent=&env.span)]
-    fn process_auto_fetch_start(&self, env: EventEnvelope, _queue: &mut VecDeque<EventEnvelope>) {
-        ev_guard!(env => AutoFetchStart(url));
+    #[handler(AutoFetchStart)]
+    fn process_auto_fetch_start(&self, url: String) {
         self.state.write().auto_fetcher.enable(url, self.sender());
     }
-    #[tracing::instrument(skip_all, parent=&env.span)]
-    fn process_auto_fetch_stop(&self, env: EventEnvelope, _queue: &mut VecDeque<EventEnvelope>) {
-        ev_guard!(env => AutoFetchStop);
+    #[handler(AutoFetchStop)]
+    fn process_auto_fetch_stop(&self) {
         self.state.write().auto_fetcher.disable();
     }
-    #[tracing::instrument(skip_all, parent=&env.span)]
-    fn process_batch_processing_start(&self, env: EventEnvelope, queue: &mut VecDeque<EventEnvelope>) {
-        ev_guard!(env => BatchProcessingStart{requirements, pdf_path});
-
+    #[handler(BatchProcessingStart)]
+    fn process_batch_processing_start(&self, requirements: String, pdf_path: String) {
         self.state.write().batch_processor.enable(
             self.api_semaphore.clone(),
             self.state.clone(),
@@ -230,15 +233,12 @@ impl EventHandler {
             pdf_path,
         );
     }
-    #[tracing::instrument(skip_all, parent=&env.span)]
-    fn process_batch_processing_stop(&self, env: EventEnvelope, queue: &mut VecDeque<EventEnvelope>) {
-        ev_guard!(env => BatchProcessingStop);
-
+    #[handler(BatchProcessingStop)]
+    fn process_batch_processing_stop(&self) {
         self.state.write().batch_processor.disable();
     }
-    #[tracing::instrument(skip_all, parent=&env.span)]
-    fn process_comments(&self, env: EventEnvelope, queue: &mut VecDeque<EventEnvelope>) {
-        ev_guard!(env => CommentsProcess { url } );
+    #[handler(CommentsProcess)]
+    fn process_comments(&self, url: String) {
         let tx = self.sender();
         let span = env.span.clone();
         let app_service = self.app_service.clone();
@@ -259,10 +259,8 @@ impl EventHandler {
             .instrument(env.span),
         );
     }
-    #[tracing::instrument(skip_all, parent=&env.span)]
-    fn process_comments_update(&self, env: EventEnvelope, queue: &mut VecDeque<EventEnvelope>) {
-        ev_guard!(env => CommentsUpdate { comments });
-
+    #[handler(CommentsUpdate)]
+    fn process_comments_update(&self, comments: Vec<Comment>) {
         let mut hm: HashMap<u32, Comment> = self
             .state
             .read()
@@ -284,9 +282,8 @@ impl EventHandler {
         }
         self.state.write().comments = hm.into_values().collect::<Vec<_>>();
     }
-    #[tracing::instrument(skip_all, parent=&env.span)]
-    fn process_signal(&self, env: EventEnvelope, queue: &mut VecDeque<EventEnvelope>) {
-        ev_guard!(env => Signal(id,barrier_data));
+    #[handler(Signal)]
+    fn process_signal(&self, id: u32, barrier_data: BarrierData, queue: &mut VecDeque<EventEnvelope>) {
         tracing::info!("Signal({}): {:?}", id, barrier_data);
         let mut state = self.state.write();
         let barriers = state.barriers.entry(id).or_default();
@@ -310,14 +307,12 @@ impl EventHandler {
             true // Keep
         });
     }
-    #[tracing::instrument(skip_all, parent=&env.span)]
-    fn process_flag_update(&self, env: EventEnvelope, queue: &mut VecDeque<EventEnvelope>) {
-        ev_guard!(env => FlagEventUpdate { id, flag });
+    #[handler(FlagEventUpdate)]
+    fn process_flag_update(&self, id: u32, flag: Flags) {
         self.state.write().flags.insert(id, flag);
     }
-    #[tracing::instrument(skip_all, parent=&env.span)]
-    fn process_notify(&self, env: EventEnvelope, queue: &mut VecDeque<EventEnvelope>) {
-        ev_guard!(env => Notify { id });
+    #[handler(Notify)]
+    fn process_notify(&self, id: u32, env: EventEnvelope) {
         if !self.state.read().notifications {
             self.state.write().notify_data.mark_notified(id);
             return;
@@ -334,10 +329,15 @@ impl EventHandler {
             }
         });
     }
-    #[tracing::instrument(skip_all, parent=&env.span)]
-    fn process_evaluate(&self, env: EventEnvelope, queue: &mut VecDeque<EventEnvelope>) {
-        ev_guard!(env => Evaluate { try_cache, comment, requirements, pdf_path, permit });
-
+    #[handler(Evaluate)]
+    fn process_evaluate(
+        &self,
+        try_cache: bool,
+        comment: Comment,
+        requirements: String,
+        pdf_path: String,
+        permit: Option<Arc<OwnedSemaphorePermit>>,
+    ) {
         {
             let _span = tracing::debug_span!("Create barrier").entered();
             let mut state = self.state.write();
@@ -364,10 +364,8 @@ impl EventHandler {
             .await;
         });
     }
-    #[tracing::instrument(skip_all, parent=&env.span)]
-    fn process_evaluate_cache_fetch(&self, env: EventEnvelope, queue: &mut VecDeque<EventEnvelope>) {
-        ev_guard!(env => EvaluationCacheFetch { requirements, pdf_path, then });
-
+    #[handler(EvaluationCacheFetch)]
+    fn process_evaluate_cache_fetch(&self, requirements: String, pdf_path: String, then: Vec<Event>) {
         let api_key = self.state.read().api_key.clone();
         let tx = self.sender();
         let state = self.state.clone();
@@ -406,9 +404,8 @@ impl EventHandler {
             };
         });
     }
-    #[tracing::instrument(skip_all, parent=&env.span)]
-    fn process_evaluate_enrich_with_jd(&self, env: EventEnvelope, queue: &mut VecDeque<EventEnvelope>) {
-        ev_guard!(env => EvaluationEnrichWithJd { comment_id });
+    #[handler(EvaluationEnrichWithJd)]
+    fn process_evaluate_enrich_with_jd(&self, comment_id: u32) {
         let mut state = self.state.write();
         if let (Some(mut ev), Some(jd)) = (
             state.evaluations.get_mut(&comment_id).cloned(),
@@ -422,9 +419,15 @@ impl EventHandler {
             }
         }
     }
-    #[tracing::instrument(skip_all, parent=&env.span)]
-    fn process_job_description_fetch(&self, env: EventEnvelope, queue: &mut VecDeque<EventEnvelope>) {
-        ev_guard!(env => FetchJobDescription { id, model, input, try_cache, permit});
+    #[handler(FetchJobDescription)]
+    fn process_job_description_fetch(
+        &self,
+        id: u32,
+        model: String,
+        input: String,
+        try_cache: bool,
+        permit: Option<Arc<OwnedSemaphorePermit>>,
+    ) {
         {
             let mut state = self.state.write();
             insert_jd_evaluation_barrier(&mut state, self.sender(), id);
@@ -465,7 +468,10 @@ impl EventHandler {
                         }
                         let _ = tx
                             .send(EventEnvelope {
-                                event: Event::Signal(id, BarrierData::JobDescription),
+                                event: Event::Signal {
+                                    id,
+                                    barrier_data: BarrierData::JobDescription,
+                                },
                                 span: tracing::info_span!("signal_job_description"),
                             })
                             .await;
@@ -476,37 +482,31 @@ impl EventHandler {
         });
     }
 
-    #[tracing::instrument(skip_all, parent=&env.span)]
-    fn process_remove_notify(&self, env: EventEnvelope, queue: &mut VecDeque<EventEnvelope>) {
-        ev_guard!(env => RemoveNotify(id));
+    #[handler(RemoveNotify)]
+    fn process_remove_notify(&self, id: u32) {
         tracing::debug!("Remove ID from Notify");
         self.state.write().notify_data.notified_ids.remove(&id);
     }
-    #[tracing::instrument(skip_all, parent=&env.span)]
-    fn process_remove_evaluation_all(&self, env: EventEnvelope, queue: &mut VecDeque<EventEnvelope>) {
-        ev_guard!(env => RemoveEvaluationAll);
+    #[handler(RemoveEvaluationAll)]
+    fn process_remove_evaluation_all(&self) {
         tracing::info!("Remove all evaluation disabled");
         // self.state.write().evaluations.clear();
     }
-    #[tracing::instrument(skip_all, parent=&env.span)]
-    fn process_sync_apikey(&self, env: EventEnvelope, queue: &mut VecDeque<EventEnvelope>) {
-        ev_guard!(env => SyncApiKey(key));
+    #[handler(SyncApiKey)]
+    fn process_sync_apikey(&self, key: String) {
         tracing::debug!("Sync ApiKey");
         self.state.write().api_key = Arc::from(key);
     }
-    #[tracing::instrument(skip_all, parent=&env.span)]
-    fn process_evaluate_try(&self, env: EventEnvelope, queue: &mut VecDeque<EventEnvelope>) {
-        ev_guard!(
-            env => EvaluateTry {
-                try_cache,
-                comment,
-                requirements,
-                pdf_path,
-                retry,
-                permit,
-            }
-        );
-
+    #[handler(EvaluateTry)]
+    fn process_evaluate_try(
+        &self,
+        try_cache: bool,
+        comment: Comment,
+        requirements: String,
+        pdf_path: String,
+        retry: usize,
+        permit: Option<Arc<OwnedSemaphorePermit>>,
+    ) {
         tracing::debug!("EvaluateTry(...)");
         // Retry stop
         if retry > 3 {
@@ -555,7 +555,10 @@ impl EventHandler {
                             }
                             let _ = tx
                                 .send(EventEnvelope {
-                                    event: Event::Signal(comment.id, BarrierData::Evaluation),
+                                    event: Event::Signal {
+                                        id: comment.id,
+                                        barrier_data: BarrierData::Evaluation,
+                                    },
                                     span: tracing::info_span!("signal_evaluation"),
                                 })
                                 .await;
@@ -582,22 +585,18 @@ impl EventHandler {
             );
         }
     }
-    #[tracing::instrument(skip_all, parent=&env.span)]
-    fn process_front_page_processing_start(&self, env: EventEnvelope, _queue: &mut VecDeque<EventEnvelope>) {
-        ev_guard!(env => FrontPageProcessingStart);
+    #[handler(FrontPageProcessingStart)]
+    fn process_front_page_processing_start(&self) {
         self.state.write().front_page_processor.enable(self.sender());
     }
 
-    #[tracing::instrument(skip_all, parent=&env.span)]
-    fn process_front_page_processing_end(&self, env: EventEnvelope, _queue: &mut VecDeque<EventEnvelope>) {
-        ev_guard!(env => FrontPageProcessingEnd );
+    #[handler(FrontPageProcessingEnd)]
+    fn process_front_page_processing_end(&self) {
         self.state.write().front_page_processor.disable();
     }
 
-    #[tracing::instrument(skip_all, parent=&env.span)]
-    fn process_front_page_update(&self, env: EventEnvelope, queue: &mut VecDeque<EventEnvelope>) {
-        ev_guard!(env => FrontPageUpdate { stories });
-
+    #[handler(FrontPageUpdate)]
+    fn process_front_page_update(&self, stories: Vec<Story>) {
         let topic = self.state.read().notify_data.topic.clone();
         let story_check: fn(String) -> bool = |text: String| {
             let checks = vec!["who is hiring", "who's hiring"];

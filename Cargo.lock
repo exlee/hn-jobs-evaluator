@@ -1420,6 +1420,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "event_macros"
+version = "0.1.0"
+dependencies = [
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2380,6 +2390,7 @@ dependencies = [
  "chrono",
  "eframe",
  "egui_extras",
+ "event_macros",
  "futures",
  "llmuxer",
  "md5",
