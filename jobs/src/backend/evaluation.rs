@@ -1,8 +1,9 @@
 use anyhow::Context;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::PathBuf;
 use std::time::Duration;
-use std::{fs, path::Path};
 
 use crate::backend::comments::Comment;
 use crate::backend::job_description::JobDescription;
@@ -48,9 +49,9 @@ impl Usable for EvaluationCache {
 }
 
 pub async fn evaluate_comment_cached(
-    comment: &Comment,
-    ev_cache: &EvaluationCache,
-    api_key: &str,
+    comment: Comment,
+    ev_cache: EvaluationCache,
+    api_key: String,
 ) -> anyhow::Result<Evaluation> {
     let client = reqwest::Client::new();
 
@@ -85,10 +86,7 @@ pub async fn evaluate_comment_cached(
 
     let url = format!(
         "{}{}{}{}",
-        "https://generativelanguage.googleapis.com/v1beta/models/",
-        MODEL,
-        ":generateContent?key=",
-        api_key
+        "https://generativelanguage.googleapis.com/v1beta/models/", MODEL, ":generateContent?key=", api_key
     );
 
     let res: serde_json::Value = client
@@ -110,9 +108,9 @@ pub async fn evaluate_comment_cached(
 }
 
 pub async fn create_evaluation_cache(
-    api_key: &str,
-    pdf_path: &Path,
-    requirements: &str,
+    api_key: String,
+    pdf_path: PathBuf,
+    requirements: String,
     ttl: Duration,
 ) -> Result<String, String> {
     let time_pad = 10;

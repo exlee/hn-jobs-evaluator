@@ -20,7 +20,7 @@ impl Default for AutoFetcher {
         let app_service: Arc<dyn AppService> = if crate::demo::is_demo() {
             Arc::new(AppServiceDemo {})
         } else {
-            Arc::new(AppServiceDefault)
+            Arc::new(AppServiceDefault {})
         };
         Self {
             app_service,
@@ -37,7 +37,7 @@ impl AutoFetcher {
         let join = tokio::task::spawn(async move {
             loop {
                 let comments = app_service
-                    .get_comments_from_url(&url, true)
+                    .get_comments_from_url(url.clone(), true)
                     .instrument(tracing::info_span!("comments_update_loop"))
                     .await;
                 let _ = tx

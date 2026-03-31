@@ -1,13 +1,10 @@
-use std::path::Path;
+use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::backend::comments::{Comment, get_comments_from_url as comments_get_comments_from_url};
-use crate::backend::evaluation::{
-    Evaluation, EvaluationCache, create_evaluation_cache as eval_create_evaluation_cache,
-    evaluate_comment_cached as eval_evaluate_comment_cached,
-};
-use crate::backend::front_page::{self, Story};
-use crate::backend::job_description::{JobDescription, parse_job_description as jd_parse_job_description};
+use crate::backend::comments::Comment;
+use crate::backend::evaluation::{Evaluation, EvaluationCache};
+use crate::backend::front_page::Story;
+use crate::backend::job_description::JobDescription;
 use crate::backend::notify::NotifyData;
 use chrono::Utc;
 
@@ -58,24 +55,42 @@ impl Blank for Comment {
     }
 }
 
+#[event_macros::service_handler]
 pub trait AppService: Send + Sync {
-    fn get_comments_from_url(&self, url: &str, force: bool) -> async_res!(Vec<Comment>);
-    fn evaluate_comment_cached(
+    #[function(crate::backend::comments::get_comments_from_url)]
+    #[blank(Vec::new())]
+    async fn get_comments_from_url(&self, url: String, force: bool) -> Vec<Comment>;
+
+    #[function(crate::backend::evaluation::evaluate_comment_cached)]
+    #[blank(Ok(Evaluation::blank()))]
+    async fn evaluate_comment_cached(
         &self,
-        comment: &Comment,
-        ev_cache: &EvaluationCache,
-        api_key: &str,
-    ) -> async_res!(anyhow::Result<Evaluation>);
-    fn create_evaluation_cache(
+        comment: Comment,
+        ev_cache: EvaluationCache,
+        api_key: String,
+    ) -> anyhow::Result<Evaluation>;
+
+    #[function(crate::backend::evaluation::create_evaluation_cache)]
+    #[blank(Ok(String::new()))]
+    async fn create_evaluation_cache(
         &self,
-        api_key: &str,
-        pdf_path: &Path,
-        requirements: &str,
+        api_key: String,
+        pdf_path: PathBuf,
+        requirements: String,
         ttl: Duration,
-    ) -> async_res!(Result<String, String>);
-    fn parse_job_description(&self, llm_config: llmuxer::LlmConfig, input: &str) -> Result<JobDescription, String>;
-    fn notify_evaluation(&self, id: u32, notify_data: &mut NotifyData, evaluation: &Evaluation) -> anyhow::Result<()>;
-    fn get_front_page_stories(&self) -> async_res!(Vec<Story>);
+    ) -> Result<String, String>;
+
+    #[function(crate::backend::job_description::parse_job_description)]
+    #[blank(Ok(JobDescription::default()))]
+    fn parse_job_description(&self, llm_config: llmuxer::LlmConfig, input: String) -> Result<JobDescription, String>;
+
+    #[function(notify_evaluation)]
+    #[blank(Ok(()))]
+    fn notify_evaluation(&self, id: u32, notify_data: NotifyData, evaluation: Evaluation) -> anyhow::Result<()>;
+
+    #[function(crate::backend::front_page::get_front_page_stories)]
+    #[blank(Ok(Vec::new()))]
+    async fn get_front_page_stories(&self) -> anyhow::Result<Vec<Story>>;
 }
 
 impl std::fmt::Debug for dyn AppService {
@@ -83,47 +98,7 @@ impl std::fmt::Debug for dyn AppService {
         write!(f, "AppService")
     }
 }
-pub struct AppServiceDefault;
 
-impl AppService for AppServiceDefault {
-    fn get_front_page_stories(&self) -> async_res!(Vec<Story>) {
-        Box::pin(async { front_page::get_front_page_stories().await.unwrap_or_default() })
-    }
-    fn get_comments_from_url(&self, url: &str, force: bool) -> async_res!(Vec<Comment>) {
-        let url = url.to_string();
-        Box::pin(async move { comments_get_comments_from_url(&url, force).await })
-    }
-
-    fn evaluate_comment_cached(
-        &self,
-        comment: &Comment,
-        ev_cache: &EvaluationCache,
-        api_key: &str,
-    ) -> async_res!(anyhow::Result<Evaluation>) {
-        let comment = comment.clone();
-        let ev_cache = ev_cache.clone();
-        let api_key = api_key.to_string();
-        Box::pin(async move { eval_evaluate_comment_cached(&comment, &ev_cache, &api_key).await })
-    }
-
-    fn create_evaluation_cache(
-        &self,
-        api_key: &str,
-        pdf_path: &Path,
-        requirements: &str,
-        ttl: Duration,
-    ) -> async_res!(Result<String, String>) {
-        let api_key = api_key.to_string();
-        let pdf_path = pdf_path.to_path_buf();
-        let requirements = requirements.to_string();
-        Box::pin(async move { eval_create_evaluation_cache(&api_key, &pdf_path, &requirements, ttl).await })
-    }
-
-    fn parse_job_description(&self, llm_config: llmuxer::LlmConfig, input: &str) -> Result<JobDescription, String> {
-        jd_parse_job_description(llm_config, input)
-    }
-
-    fn notify_evaluation(&self, id: u32, notify_data: &mut NotifyData, evaluation: &Evaluation) -> anyhow::Result<()> {
-        notify_data.notify_evaluation(id, evaluation)
-    }
+fn notify_evaluation(id: u32, mut notify_data: NotifyData, evaluation: Evaluation) -> anyhow::Result<()> {
+    notify_data.notify_evaluation(id, &evaluation)
 }

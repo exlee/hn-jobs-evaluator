@@ -24,10 +24,7 @@ pub struct JobDescription {
     pub red_flags: Vec<String>,
 }
 
-pub fn parse_job_description(
-    llm_config: llmuxer::LlmConfig,
-    input: &str,
-) -> Result<JobDescription, String> {
+pub fn parse_job_description(llm_config: llmuxer::LlmConfig, input: String) -> Result<JobDescription, String> {
     let schema = serde_json::json!({
         "type": "object",
         "properties": {
@@ -61,7 +58,7 @@ pub fn parse_job_description(
         )
         .build()
         .expect("Couldn't build the client");
-    let llm_result = llm_client.query(input).json::<JobDescription>();
+    let llm_result = llm_client.query(&input).json::<JobDescription>();
 
     if let Err(llm_error) = llm_result {
         return Err(llm_error.to_string());
@@ -85,8 +82,7 @@ mod tests {
     fn test_parse_job_description() {
         use crate::backend::evaluation::MODEL;
 
-        let api_key = env::var("TEST_GOOGLE_API_KEY")
-            .expect("TEST_GOOGLE_API_KEY must be set to run this test");
+        let api_key = env::var("TEST_GOOGLE_API_KEY").expect("TEST_GOOGLE_API_KEY must be set to run this test");
 
         let input = r#"
             We are looking for a Senior Rust Developer at Oxide Computer Company.
@@ -107,7 +103,7 @@ mod tests {
                 base_url: None,
                 model: String::from(MODEL),
             },
-            input,
+            input.into(),
         );
 
         assert!(result.is_ok(), "Parsing failed: {:?}", result.err());

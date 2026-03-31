@@ -19,7 +19,7 @@ pub fn is_demo() -> bool {
 
 pub struct AppServiceDemo {}
 impl AppService for AppServiceDemo {
-    fn get_comments_from_url(&self, _url: &str, _force: bool) -> async_res!(Vec<Comment>) {
+    fn get_comments_from_url(&self, _url: String, _force: bool) -> async_res!(Vec<Comment>) {
         let mut counter = 21321;
         let off: fn(i64) -> chrono::DateTime<Utc> = |min| Utc::now() - chrono::Duration::minutes(min);
         let inc = move || {
@@ -32,18 +32,18 @@ impl AppService for AppServiceDemo {
 
     fn evaluate_comment_cached(
         &self,
-        _comment: &crate::models::Comment,
-        _ev_cache: &crate::models::EvaluationCache,
-        _api_key: &str,
+        _comment: crate::models::Comment,
+        _ev_cache: crate::models::EvaluationCache,
+        _api_key: String,
     ) -> async_res!(anyhow::Result<Evaluation>) {
         Box::pin(generate_evaluation())
     }
 
     fn create_evaluation_cache(
         &self,
-        _api_key: &str,
-        _pdf_path: &std::path::Path,
-        _requirements: &str,
+        _api_key: String,
+        _pdf_path: std::path::PathBuf,
+        _requirements: String,
         _ttl: std::time::Duration,
     ) -> async_res!(Result<String, String>) {
         std::thread::sleep(std::time::Duration::from_millis(1500));
@@ -53,7 +53,7 @@ impl AppService for AppServiceDemo {
     fn parse_job_description(
         &self,
         _llm_config: llmuxer::LlmConfig,
-        _input: &str,
+        _input: String,
     ) -> Result<crate::models::JobDescription, String> {
         std::thread::sleep(std::time::Duration::from_millis(1500));
         generate_job_description()
@@ -62,8 +62,8 @@ impl AppService for AppServiceDemo {
     fn notify_evaluation(
         &self,
         _id: u32,
-        _notify_data: &mut crate::backend::notify::NotifyData,
-        evaluation: &Evaluation,
+        mut _notify_data: crate::backend::notify::NotifyData,
+        evaluation: Evaluation,
     ) -> anyhow::Result<()> {
         let technologies = evaluation
             .job_description
@@ -91,11 +91,10 @@ impl AppService for AppServiceDemo {
         Ok(())
     }
 
-    fn get_front_page_stories(&self) -> async_res!(Vec<Story>) {
-        Box::pin(async { vec![] })
+    fn get_front_page_stories(&self) -> async_res!(anyhow::Result<Vec<Story>>) {
+        Box::pin(async { Ok(vec![]) })
     }
 }
-
 async fn generate_evaluation() -> anyhow::Result<Evaluation> {
     use rand::RngExt;
     use rand::seq::IndexedRandom as _;

@@ -1,4 +1,3 @@
-use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::{ToTokens, quote};
 use syn::{FnArg, Ident, ImplItem, ItemImpl, Pat, parse_quote};
@@ -235,7 +234,6 @@ pub(crate) fn event_processor_impl(input: proc_macro2::TokenStream) -> proc_macr
         }
     }
     //#(#handlers),*
-    eprintln!("{}", handle_method.clone().to_string());
     item_impl
         .items
         .push(syn::parse2(handle_method).expect("Failed to parse generated handle method"));
@@ -257,13 +255,11 @@ mod tests {
     use quote::quote;
 
     fn pretty_print(tokens: proc_macro2::TokenStream) -> String {
-        println!("HERE");
         // 1. Parse the tokens into a syntax tree (syn::File)
         // Note: This requires the tokens to be a valid Rust file (items only)
         let Ok(syntax_tree) = syn::parse2::<syn::File>(tokens.clone()) else {
             return tokens.to_string();
         };
-        println!("HERE");
 
         // 2. Format it
         prettyplease::unparse(&syntax_tree)

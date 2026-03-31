@@ -17,7 +17,7 @@ fn main() {
         panic!("Clipboard content must have at least 3 words");
     }
 
-    match app_service.parse_job_description(llm_config, &input) {
+    match app_service.parse_job_description(llm_config, input) {
         Ok(job) => {
             println!("Parsed Job Description:");
             println!("Company: {}", job.company_name);

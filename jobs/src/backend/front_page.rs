@@ -63,7 +63,7 @@ impl Default for FrontPageProcessor {
         let app_service: Arc<dyn AppService> = if crate::demo::is_demo() {
             Arc::new(AppServiceDemo {})
         } else {
-            Arc::new(AppServiceDefault)
+            Arc::new(AppServiceDefault {})
         };
         Self {
             app_service,
@@ -82,7 +82,8 @@ impl FrontPageProcessor {
                 let stories = app_service
                     .get_front_page_stories()
                     .instrument(tracing::info_span!("front_page_update_loop"))
-                    .await;
+                    .await
+                    .unwrap_or_default();
                 let _ = tx
                     .send(EventEnvelope {
                         event: Event::FrontPageUpdate { stories },

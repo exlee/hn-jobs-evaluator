@@ -171,7 +171,7 @@ impl EventHandler {
         tokio::task::spawn(
             async move {
                 let comments = app_service
-                    .get_comments_from_url(&url, true)
+                    .get_comments_from_url(url.clone(), true)
                     .instrument(tracing::info_span!(parent: &span, "comments_update_loop"))
                     .await;
                 let _ = tx
@@ -250,7 +250,7 @@ impl EventHandler {
             let _guard = tracing::info_span!("notify evaluation");
             if let Some(eval) = evaluation {
                 let mut state = state.write();
-                app_service.notify_evaluation(id, &mut state.notify_data, &eval);
+                app_service.notify_evaluation(id, state.notify_data.clone(), eval);
             }
         });
     }
@@ -298,8 +298,9 @@ impl EventHandler {
         tokio::spawn(async move {
             let path = PathBuf::from(pdf_path);
             let ttl = Duration::from_hours(24);
+            let api_key = api_key.clone().to_string();
             let result = app_service
-                .create_evaluation_cache(&api_key, &path, &requirements, ttl)
+                .create_evaluation_cache(api_key, path, requirements, ttl)
                 .await;
             match result {
                 Ok(cache_key) => {
@@ -381,7 +382,7 @@ impl EventHandler {
                 let input = input.clone();
                 let llm_config = llm_config.clone();
                 let job_result =
-                    tokio::task::spawn_blocking(move || app_service.parse_job_description(llm_config, &input)).await;
+                    tokio::task::spawn_blocking(move || app_service.parse_job_description(llm_config, input)).await;
 
                 match job_result {
                     Err(e) => tracing::error!("Join Error: {:?}", e),
@@ -470,7 +471,7 @@ impl EventHandler {
             tokio::spawn(
                 async move {
                     let result = app_service
-                        .evaluate_comment_cached(&comment, &eval_cache, &api_key)
+                        .evaluate_comment_cached(comment.clone(), eval_cache, api_key)
                         .await;
                     match result {
                         Ok(ev) => {
@@ -569,7 +570,7 @@ impl Default for EventHandler {
         Self {
             state: Arc::new(RwLock::new(State::default())),
             api_semaphore: new_api_semaphore(),
-            app_service: Arc::new(app_service::AppServiceDefault),
+            app_service: Arc::new(app_service::AppServiceDefault {}),
             tx: Arc::new(RwLock::new(tx)),
         }
     }

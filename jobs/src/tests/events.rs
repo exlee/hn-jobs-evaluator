@@ -1,4 +1,6 @@
-use crate::{backend::app_service::Blank as _, events::*, models::Comment, tests::app_service::AppServiceClosures};
+use crate::{
+    backend::app_service::Blank as _, backend::app_service::tests::AppServiceClosures, events::*, models::Comment,
+};
 
 use parking_lot::RwLock;
 use std::{marker::PhantomData, sync::Arc, time::Duration};

@@ -20,11 +20,7 @@ pub(in crate::backend) async fn get_comments(item_id: u32, force: bool) -> Vec<C
     let cache_path = format!("cache_{}.json", item_id);
     if !force {
         if let Ok(metadata) = fs::metadata(&cache_path) {
-            let elapsed = metadata
-                .modified()
-                .unwrap()
-                .elapsed()
-                .unwrap_or(MAX_CACHE_AGE);
+            let elapsed = metadata.modified().unwrap().elapsed().unwrap_or(MAX_CACHE_AGE);
             if elapsed < MAX_CACHE_AGE {
                 let data = fs::read_to_string(&cache_path).unwrap();
                 return serde_json::from_str(&data).unwrap();
@@ -44,7 +40,7 @@ pub(in crate::backend) async fn get_comments(item_id: u32, force: bool) -> Vec<C
     fs::write(cache_path, serde_json::to_string(&comments).unwrap()).unwrap();
     comments
 }
-pub(in crate::backend) async fn get_comments_from_url(url: &str, force: bool) -> Vec<Comment> {
+pub(in crate::backend) async fn get_comments_from_url(url: String, force: bool) -> Vec<Comment> {
     let item_id = parse_item_id(&url);
     let comments = get_comments(item_id, force).await;
     let comments = filter_top_level(&comments, item_id);
@@ -52,18 +48,12 @@ pub(in crate::backend) async fn get_comments_from_url(url: &str, force: bool) ->
     comments
 }
 
-pub(in crate::backend) fn flatten_comments(
-    node: &serde_json::Value,
-    parent_id: u32,
-    acc: &mut Vec<Comment>,
-) {
+pub(in crate::backend) fn flatten_comments(node: &serde_json::Value, parent_id: u32, acc: &mut Vec<Comment>) {
     if let Some(children) = node.as_array() {
         for child in children {
             let id = child["id"].as_u64().unwrap() as u32;
             let date_str = child["created_at"].as_str().unwrap_or("");
-            let created_at = date_str
-                .parse::<DateTime<Utc>>()
-                .unwrap_or_else(|_| Utc::now());
+            let created_at = date_str.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now());
             acc.push(Comment {
                 id,
                 author: child["author"].as_str().unwrap_or("deleted").to_string(),
@@ -99,10 +89,7 @@ pub(in crate::backend) fn clean_html(html: &str) -> String {
         .collect::<Vec<_>>()
         .join("\n\n")
 }
-pub(in crate::backend) fn filter_top_level(
-    comments: &[Comment],
-    thread_root_id: u32,
-) -> Vec<&Comment> {
+pub(in crate::backend) fn filter_top_level(comments: &[Comment], thread_root_id: u32) -> Vec<&Comment> {
     comments
         .iter()
         .filter(|c| c.parent == thread_root_id)
