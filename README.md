@@ -2,7 +2,7 @@
 
 Scanning the monthly HN hiring thread is tedious. This tool fetches all top-level comments, runs each one against your resume and requirements through Gemini, and scores them — so you read the 5 worth reading, not the 500.
 
-![](./assets/screenshot.png)
+![](./jobs/assets/screenshot.png)
 
 ## Installation
 
@@ -16,7 +16,7 @@ Or grab a binary from the [Releases](https://github.com/exlee/hn-jobs-evaluator/
 
 ## Usage
 
-![](./assets/guide.png)
+![](./jobs/assets/guide.png)
 
 1. Paste the "Who is Hiring" thread URL and your Gemini API key
 2. Click **Process Comments** to fetch and cache the thread
