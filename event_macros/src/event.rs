@@ -5,6 +5,7 @@ use syn::{FnArg, Ident, ImplItem, ItemImpl, Pat, parse_quote};
 pub(crate) fn event_processor_impl(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
     let mut item_impl: ItemImpl = syn::parse2(input).expect("Cannot parse input");
     let mut match_arms = Vec::new();
+    let mut debug_arms = Vec::new();
     let mut handlers = Vec::new();
     let mut events = Vec::new();
     let mut i = 0;
@@ -176,8 +177,12 @@ pub(crate) fn event_processor_impl(input: proc_macro2::TokenStream) -> proc_macr
                     Event::#variant_ident #event_match => self.#method_name(env, queue)
                 });
 
+                debug_arms.push(quote! {
+                    Event::#variant_ident #event_match => write!(f, stringify!(#variant_ident))
+                });
+
                 handlers.push(quote! {
-                   fn #method_name(&self, env: EventEnvelope, queue: &mut VecDeque<EventEnvelope>)  {
+                    fn #method_name(&self, env: EventEnvelope, queue: &mut VecDeque<EventEnvelope>)  {
                        #guard_stmt
                        #queue_assignment
                        #span_assignment
@@ -213,7 +218,6 @@ pub(crate) fn event_processor_impl(input: proc_macro2::TokenStream) -> proc_macr
     let event_enum = syn::ItemEnum {
         attrs: parse_quote! {
             #[derive(Serialize, Deserialize, Clone )]
-            #[derive(strum::IntoStaticStr)]
         },
         vis: parse_quote!(pub),
         enum_token: syn::token::Enum::default(),
@@ -238,12 +242,24 @@ pub(crate) fn event_processor_impl(input: proc_macro2::TokenStream) -> proc_macr
         .items
         .push(syn::parse2(handle_method).expect("Failed to parse generated handle method"));
     item_impl.attrs.retain(|attr| !attr.path().is_ident("event_processor"));
+
+    let debug_impl = quote! {
+        impl std::fmt::Debug for Event {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    #(#debug_arms),*
+                    ,_ => write!(f, "Unknown Event"),
+                }
+            }
+        }
+    };
+
     quote! {
         #event_enum
+        #debug_impl
         #item_impl
     }
 }
-
 fn find_and_remove_handler_attr(attrs: &mut Vec<syn::Attribute>) -> Option<syn::Attribute> {
     let index = attrs.iter().position(|attr| attr.path().is_ident("handler"))?;
     Some(attrs.remove(index))
@@ -265,7 +281,7 @@ mod tests {
         prettyplease::unparse(&syntax_tree)
     }
     #[test]
-    fn debug_macro_output() {
+    fn event_debug_macro_output() {
         // Define what the input code looks like
         let input = quote! {
             #[event_processor]

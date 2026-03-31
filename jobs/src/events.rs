@@ -68,11 +68,6 @@ pub struct EventEnvelope {
     pub span: tracing::Span,
 }
 
-impl std::fmt::Debug for Event {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Event<{}>", <&'static str>::from(self))
-    }
-}
 pub struct EventHandler {
     pub state: Arc<RwLock<State>>,
     pub tx: Arc<RwLock<Sender<EventEnvelope>>>,
@@ -432,6 +427,7 @@ impl EventHandler {
         pdf_path: String,
         retry: usize,
         permit: Option<Arc<OwnedSemaphorePermit>>,
+        queue: &mut VecDeque<EventEnvelope>,
     ) {
         tracing::debug!("EvaluateTry(...)");
         // Retry stop
