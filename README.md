@@ -41,3 +41,31 @@ Or grab a binary from the [Releases](https://github.com/exlee/hn-jobs-evaluator/
 - State is persisted across sessions
 - Evaluations are keyed to comment ID — safe to re-fetch the thread without losing results
 - Scores are 0–100; each row shows Evaluation, Tech Alignment, and Comp Alignment separately
+
+## Changelog
+
+### 31-03-2026
+#### Architectural Changes
+*   Migrated to Cargo workspace: split into `jobs` and `event_macros` crates.
+*   Introduced event-driven architecture with custom procedural macros.
+*   Abstracted backend logic via `AppService` trait.
+
+#### Features
+*   Integrated LLM-based parsing for HN comment extraction.
+*   Added periodic background job fetching.
+*   Implemented concurrent batch processing with semaphore limits.
+*   Added push notifications via `ntfy.sh`.
+*   Added monitor for HN "Who is Hiring" front-page threads.
+
+#### GUI and UX
+*   Enabled filtering by score, status, and view-state.
+*   Implemented color-coded visual scoring.
+*   Added structured column view for compensation and technologies.
+*   Integrated real-time keyword search.
+
+#### Observability
+*   Added OpenTelemetry support for distributed tracing.
+*   Integrated deadlock detection monitoring.
+
+#### Bug Fixes and Refactoring
+*   Optimized cache TTL and invalidation logic.
