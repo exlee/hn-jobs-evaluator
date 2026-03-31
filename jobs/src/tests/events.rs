@@ -19,7 +19,6 @@ impl<T: 'static + Sync + Send, R: 'static + Clone + Sync + Send + std::fmt::Debu
     ) {
         while let Some(message_raw) = inner_rx.recv().await {
             let message = transformer(&message_raw);
-            dbg!(&message);
             container.write().push(message); // Clone to store and send
             if inner_tx.send(message_raw).await.is_err() {
                 // The receiving end has been dropped, so we can stop forwarding.

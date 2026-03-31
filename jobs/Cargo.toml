@@ -1,6 +1,6 @@
 [package]
 name = "jobs"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 
 [features]
@@ -45,13 +45,12 @@ tracing-tree = "0.4.1"
 strum = { version = "0.28.0", features = ["derive"] }
 tracing-opentelemetry = "0.32.1"
 opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio"] }
-opentelemetry-otlp = { version = "0.31.1", features = ["http-proto", "logs", "trace", "grpc-tonic"] }
+opentelemetry-otlp = { version = "0.31.1", features = ["http-proto", "logs", "trace", "grpc-tonic", "reqwest-rustls"] }
 
 opentelemetry = "0.31.0"
 tonic = "0.14.5"
 opentelemetry-appender-tracing = "0.31.1"
 rand = "0.10.0"
-openssl = { version = "0.10", features = ["vendored"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"
