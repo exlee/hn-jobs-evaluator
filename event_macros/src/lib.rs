@@ -1,7 +1,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::{ToTokens, quote};
-use syn::{FnArg, Ident, ImplItem, ItemEnum, ItemImpl, Pat, Stmt, parse_macro_input, parse_quote};
+use syn::{FnArg, Ident, ImplItem, ItemImpl, Pat, parse_quote};
 
 #[proc_macro_attribute]
 pub fn event_processor(_args: TokenStream, input: TokenStream) -> TokenStream {
@@ -103,7 +103,6 @@ fn event_processor_actual(input: proc_macro2::TokenStream) -> proc_macro2::Token
                     .filter_map(|p| {
                         if let syn::Pat::Ident(ident) = *p.pat.clone() {
                             let mut attrs = Vec::new();
-                            let mut is_skipped = false;
 
                             fn check_type_for_skip(ty: &syn::Type) -> bool {
                                 if let syn::Type::Path(type_path) = ty {
@@ -142,7 +141,7 @@ fn event_processor_actual(input: proc_macro2::TokenStream) -> proc_macro2::Token
                         }
                     })
                     .collect();
-                let variant_fields = if (variant_fields_vec.is_empty()) {
+                let variant_fields = if variant_fields_vec.is_empty() {
                     syn::Fields::Unit
                 } else {
                     syn::Fields::Named(syn::FieldsNamed {
@@ -256,24 +255,23 @@ fn find_and_remove_handler_attr(attrs: &mut Vec<syn::Attribute>) -> Option<syn::
     Some(attrs.remove(index))
 }
 
-fn pretty_print(tokens: proc_macro2::TokenStream) -> String {
-    println!("HERE");
-    // 1. Parse the tokens into a syntax tree (syn::File)
-    // Note: This requires the tokens to be a valid Rust file (items only)
-    let Ok(syntax_tree) = syn::parse2::<syn::File>(tokens.clone()) else {
-        return tokens.to_string();
-    };
-    println!("HERE");
-
-    // 2. Format it
-    prettyplease::unparse(&syntax_tree)
-}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use quote::{ToTokens, quote};
-    use syn::{Ident, ImplItem, ItemImpl, Pat, Stmt, parse_macro_input, parse_quote};
+    use quote::quote;
 
+    fn pretty_print(tokens: proc_macro2::TokenStream) -> String {
+        println!("HERE");
+        // 1. Parse the tokens into a syntax tree (syn::File)
+        // Note: This requires the tokens to be a valid Rust file (items only)
+        let Ok(syntax_tree) = syn::parse2::<syn::File>(tokens.clone()) else {
+            return tokens.to_string();
+        };
+        println!("HERE");
+
+        // 2. Format it
+        prettyplease::unparse(&syntax_tree)
+    }
     #[test]
     fn debug_macro_output() {
         // Define what the input code looks like

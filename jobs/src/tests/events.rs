@@ -94,14 +94,7 @@ async fn test_evaluation_event_triggers_try() {
         pdf_path: "path".to_string(),
         permit: None,
     };
-    let _ = harness
-        .event_tx
-        .send(EventEnvelope {
-            event,
-            span: tracing::debug_span!("test_evaluation_event_triggers_try"),
-        })
-        .await
-        .expect("EventEnvelope can't be sent");
+    let _ = harness.send(event);
 
     assert!(harness.handler.clone().state.read().evaluations.len() == 0);
     tokio::time::sleep(Duration::from_millis(50)).await;

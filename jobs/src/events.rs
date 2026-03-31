@@ -63,36 +63,6 @@ pub struct Barrier {
     remaining: HashSet<BarrierData>,
     then: Vec<Event>,
 }
-// Delete Evaluations
-
-// #[derive(Serialize, Deserialize, Clone )]
-// #[rustfmt::skip]
-// #[derive(strum::IntoStaticStr)]
-/*
-pub enum Event {
-    AutoFetchStart(String),
-    AutoFetchStop,
-    BatchProcessingStart{requirements: String, pdf_path: String},
-    BatchProcessingStop,
-    CommentsUpdate{ comments: Vec<Comment> },
-    Evaluate { try_cache: bool, comment: Comment, requirements: String, pdf_path: String, #[serde(skip)] permit: Option<Arc<OwnedSemaphorePermit>> },
-    EvaluateTry { try_cache: bool, comment: Comment, requirements: String, pdf_path: String, retry: usize, #[serde(skip)] permit: Option<Arc<OwnedSemaphorePermit>> },
-    EvaluationCacheFetch { requirements: String, pdf_path: String, then: Vec<Event> },
-    EvaluationEnrichWithJd { comment_id: u32 },
-    FetchJobDescription { try_cache: bool, id: u32, model: String, input: String, #[serde(skip)] permit: Option<Arc<OwnedSemaphorePermit>> },
-    FlagEventUpdate { id: u32, flag: Flags },
-    Notify { id: u32 },
-    CommentsProcess { url: String },
-    RemoveEvaluationAll,
-    RemoveNotify(u32),
-    Signal(u32, BarrierData),
-    SetNotifications{enabled: bool},
-    SyncApiKey(String),
-    FrontPageUpdate { stories: Vec<Story> },
-    FrontPageProcessingStart,
-    FrontPageProcessingEnd,
-}
-*/
 pub struct EventEnvelope {
     pub event: Event,
     pub span: tracing::Span,
@@ -102,22 +72,6 @@ impl std::fmt::Debug for Event {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Event<{}>", <&'static str>::from(self))
     }
-}
-macro_rules! event_fn {
-    ($name:ident(&$self:ident, $queue:ident) @ $pat:pat => $body:block ) => {
-        paste::paste! {
-            fn [<process_ $name>](&$self, e: Event, $queue: &mut VecDeque<Event>) {
-                let $pat = e else { return };
-                $body
-            }
-        }
-    };
-}
-macro_rules! ev_guard {
-    ($env:ident => $pat:pat) => {
-        use Event::*;
-        let $pat = $env.event else { return };
-    };
 }
 pub struct EventHandler {
     pub state: Arc<RwLock<State>>,
@@ -182,35 +136,6 @@ impl EventHandler {
             }
         }
     }
-    // #[rustfmt::skip]
-    // #[tracing::instrument(skip_all, parent=&env.span)]
-    // async fn handle(&self, env: EventEnvelope, queue: &mut VecDeque<EventEnvelope>) {
-    //     use Event::*;
-    //     tracing::debug!("handle: {:?}", env.event);
-    //     match env.event {
-    //         AutoFetchStart(_)=>self.process_auto_fetch_start(env,queue),
-    //         AutoFetchStop=>self.process_auto_fetch_stop(env,queue),
-    //         BatchProcessingStart{..}=>self.process_batch_processing_start(env,queue),
-    //         BatchProcessingStop=>self.process_batch_processing_stop(env,queue),
-    //         CommentsProcess{..}=>self.process_comments(env,queue),
-    //         CommentsUpdate{..}=>self.process_comments_update(env,queue),
-    //         EvaluateTry{..}=>self.process_evaluate_try(env,queue),
-    //         Evaluate{..}=>self.process_evaluate(env,queue),
-    //         EvaluationCacheFetch{..}=>self.process_evaluate_cache_fetch(env,queue),
-    //         EvaluationEnrichWithJd{..}=>self.process_evaluate_enrich_with_jd(env,queue),
-    //         FetchJobDescription{..}=>self.process_job_description_fetch(env,queue),
-    //         FlagEventUpdate{..}=>self.process_flag_update(env,queue),
-    //         Notify{..}=>self.process_notify(env,queue),
-    //         RemoveEvaluationAll=>self.process_remove_evaluation_all(env,queue),
-    //         RemoveNotify(_)=>self.process_remove_notify(env,queue),
-    //         SetNotifications{enabled}=>self.state.write().notifications=enabled,
-    //         Signal(..)=>self.process_signal(env,queue),
-    //         SyncApiKey(_)=>self.process_sync_apikey(env,queue),
-    //         FrontPageUpdate { .. } => self.process_front_page_update(env, queue),
-    //         FrontPageProcessingStart => self.process_front_page_processing_start(env, queue),
-    //         FrontPageProcessingEnd => self.process_front_page_processing_end(env, queue),
-    //     }
-    // }
     #[handler(SetNotifications)]
     fn process_set_notifications(&self, enabled: bool) {
         self.state.write().notifications = enabled;
@@ -652,6 +577,7 @@ impl Default for EventHandler {
 pub fn new_api_semaphore() -> Arc<Semaphore> {
     Arc::new(Semaphore::new(5))
 }
+
 #[tracing::instrument(skip(state, tx))]
 pub fn insert_jd_evaluation_barrier(state: &mut State, tx: Sender<EventEnvelope>, id: u32) {
     tracing::debug!("Creating enrich_evaluation_with_jd barrier");

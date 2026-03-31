@@ -28,8 +28,6 @@ impl NotifyData {
     }
     #[tracing::instrument(skip(eval))]
     pub fn notify_evaluation(&mut self, comment_id: u32, eval: &Evaluation) -> anyhow::Result<()> {
-        use anyhow::Context;
-
         if self.notified_ids.contains(&comment_id) {
             tracing::debug!("Already notified: {}", comment_id);
             return Ok(());
