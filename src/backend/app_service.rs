@@ -6,6 +6,7 @@ use crate::backend::evaluation::{
     Evaluation, EvaluationCache, create_evaluation_cache as eval_create_evaluation_cache,
     evaluate_comment_cached as eval_evaluate_comment_cached,
 };
+use crate::backend::front_page::{self, Story};
 use crate::backend::job_description::{JobDescription, parse_job_description as jd_parse_job_description};
 use crate::backend::notify::NotifyData;
 use chrono::Utc;
@@ -74,6 +75,7 @@ pub trait AppService: Send + Sync {
     ) -> async_res!(Result<String, String>);
     fn parse_job_description(&self, llm_config: llmuxer::LlmConfig, input: &str) -> Result<JobDescription, String>;
     fn notify_evaluation(&self, id: u32, notify_data: &mut NotifyData, evaluation: &Evaluation) -> anyhow::Result<()>;
+    fn get_front_page_stories(&self) -> async_res!(Vec<Story>);
 }
 
 impl std::fmt::Debug for dyn AppService {
@@ -84,6 +86,9 @@ impl std::fmt::Debug for dyn AppService {
 pub struct AppServiceDefault;
 
 impl AppService for AppServiceDefault {
+    fn get_front_page_stories(&self) -> async_res!(Vec<Story>) {
+        Box::pin(async { front_page::get_front_page_stories().await.unwrap_or_default() })
+    }
     fn get_comments_from_url(&self, url: &str, force: bool) -> async_res!(Vec<Comment>) {
         let url = url.to_string();
         Box::pin(async move { comments_get_comments_from_url(&url, force).await })

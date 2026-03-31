@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use anyhow::Context as _;
 use serde::{Deserialize, Serialize};
 
 use crate::backend::evaluation::Evaluation;
@@ -39,8 +40,6 @@ impl NotifyData {
             return Ok(());
         }
         tracing::debug!("Will notify: {}", comment_id);
-        let client = reqwest::Client::new();
-        let url = format!("https://ntfy.sh/{}", self.topic);
         let technologies = eval
             .job_description
             .clone()
@@ -59,23 +58,10 @@ impl NotifyData {
             .map(|jd| jd.company_name)
             .unwrap_or(String::from("Unknown company"));
 
+        let topic = self.topic.clone();
+        let title = format!("New Job {}", company_name);
         tracing::debug!("Before send spawn");
-        tokio::task::spawn(async move {
-            let result = client
-                .post(url)
-                .header("Title", format!("New Job {}", company_name))
-                .body(message)
-                .send()
-                .await
-                .context("Failed to send ntfy notification");
-            match result {
-                Ok(_) => Ok(()),
-                Err(e) => {
-                    tracing::error!("{}", e);
-                    Err(e)
-                }
-            }
-        });
+        tokio::task::spawn(ntfy_notify(topic, title, message));
 
         self.notified_ids.insert(comment_id);
 
@@ -83,5 +69,25 @@ impl NotifyData {
     }
     pub fn notified(&self, id: u32) -> bool {
         self.notified_ids.contains(&id)
+    }
+}
+
+pub async fn ntfy_notify(topic: String, title: String, message: String) -> anyhow::Result<()> {
+    let client = reqwest::Client::new();
+    let url = format!("https://ntfy.sh/{}", topic);
+
+    let result = client
+        .post(url)
+        .header("Title", title)
+        .body(message)
+        .send()
+        .await
+        .context("Failed to send ntfy notification");
+    match result {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            tracing::error!("{}", e);
+            Err(e)
+        }
     }
 }

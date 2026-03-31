@@ -84,6 +84,7 @@ pub struct AppState {
     pub auto_fetch: bool,
     pub batch_processing: bool,
     pub notifications_enabled: bool,
+    pub front_page_processing: bool,
 }
 
 // pub struct AppState {

@@ -7,7 +7,7 @@ use chrono::Utc;
 use parking_lot::RwLock;
 
 use crate::{
-    backend::autofetcher::AutoFetcher,
+    backend::{autofetcher::AutoFetcher, front_page::Story},
     common_gui, events, gui,
     models::{AppService, Comment, Evaluation, JobDescription, async_res},
 };
@@ -89,6 +89,10 @@ impl AppService for AppServiceDemo {
         let title = format!("New Job {}", company_name);
         println!("Notification: {}\n{}", title, message);
         Ok(())
+    }
+
+    fn get_front_page_stories(&self) -> async_res!(Vec<Story>) {
+        Box::pin(async { vec![] })
     }
 }
 

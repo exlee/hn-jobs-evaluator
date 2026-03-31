@@ -22,6 +22,7 @@ mod backend {
     pub mod batch_processor;
     pub mod comments;
     pub mod evaluation;
+    pub mod front_page;
     pub mod job_description;
     pub mod notify;
 }
@@ -32,6 +33,7 @@ pub mod models {
     pub use crate::backend::batch_processor::BatchProcessor;
     pub use crate::backend::comments::Comment;
     pub use crate::backend::evaluation::{Evaluation, EvaluationCache, MODEL, Usable};
+    pub use crate::backend::front_page::Story;
     pub use crate::backend::job_description::{JobDescription, JobDescriptions};
 }
 

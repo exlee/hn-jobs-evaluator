@@ -828,6 +828,16 @@ impl eframe::App for App {
                                 None => ui.label("Cache key: None"),
                             };
                         }
+                        ui.horizontal(|ui| {
+                            if toggle_ui(ui, &mut state.front_page_processing).changed() {
+                                if state.front_page_processing {
+                                    event!(self, FrontPageProcessingStart);
+                                } else {
+                                    event!(self, FrontPageProcessingEnd);
+                                }
+                            }
+                            ui.label("Front Page Wait");
+                        });
 
                         ui.horizontal(|ui| {
                             if toggle_ui(ui, &mut state.auto_fetch).changed() {

@@ -23,11 +23,12 @@ use crate::{
         batch_processor::BatchProcessor,
         comments::Comment,
         evaluation::{Evaluation, EvaluationCache},
+        front_page::FrontPageProcessor,
         job_description::JobDescription,
-        notify::NotifyData,
+        notify::{self, NotifyData},
     },
     common_gui::{Flags, ProcessingData},
-    models::{AppServiceDefault, Usable as _},
+    models::{AppServiceDefault, Story, Usable as _},
 };
 
 #[derive(Serialize, Deserialize, Default, Clone)]
@@ -36,6 +37,8 @@ pub struct State {
     #[serde(skip)]
     pub auto_fetcher: AutoFetcher,
     pub batch_processor: BatchProcessor,
+    #[serde(skip)]
+    pub front_page_processor: FrontPageProcessor,
     pub cache_key_error: Option<String>,
     pub evaluations: HashMap<u32, Evaluation>,
     pub comments: Vec<Comment>,
@@ -84,6 +87,9 @@ pub enum Event {
     Signal(u32, BarrierData),
     SetNotifications{enabled: bool},
     SyncApiKey(String),
+    FrontPageUpdate { stories: Vec<Story> },
+    FrontPageProcessingStart,
+    FrontPageProcessingEnd,
 }
 pub struct EventEnvelope {
     pub event: Event,
@@ -183,7 +189,7 @@ impl EventHandler {
             AutoFetchStop=>self.process_auto_fetch_stop(env,queue),
             BatchProcessingStart{..}=>self.process_batch_processing_start(env,queue),
             BatchProcessingStop=>self.process_batch_processing_stop(env,queue),
-            CommentsProcess{..} => self.process_comments(env, queue),
+            CommentsProcess{..}=>self.process_comments(env,queue),
             CommentsUpdate{..}=>self.process_comments_update(env,queue),
             EvaluateTry{..}=>self.process_evaluate_try(env,queue),
             Evaluate{..}=>self.process_evaluate(env,queue),
@@ -194,9 +200,12 @@ impl EventHandler {
             Notify{..}=>self.process_notify(env,queue),
             RemoveEvaluationAll=>self.process_remove_evaluation_all(env,queue),
             RemoveNotify(_)=>self.process_remove_notify(env,queue),
-            SetNotifications { enabled } => self.state.write().notifications = enabled,
+            SetNotifications{enabled}=>self.state.write().notifications=enabled,
             Signal(..)=>self.process_signal(env,queue),
             SyncApiKey(_)=>self.process_sync_apikey(env,queue),
+            FrontPageUpdate { .. } => self.process_front_page_update(env, queue),
+            FrontPageProcessingStart => self.process_front_page_processing_start(env, queue),
+            FrontPageProcessingEnd => self.process_front_page_processing_end(env, queue),
         }
     }
     #[tracing::instrument(skip_all, parent=&env.span)]
@@ -571,6 +580,41 @@ impl EventHandler {
                 }
                 .instrument(tracing::info_span!(parent: &env.span, "request")),
             );
+        }
+    }
+    #[tracing::instrument(skip_all, parent=&env.span)]
+    fn process_front_page_processing_start(&self, env: EventEnvelope, _queue: &mut VecDeque<EventEnvelope>) {
+        ev_guard!(env => FrontPageProcessingStart);
+        self.state.write().front_page_processor.enable(self.sender());
+    }
+
+    #[tracing::instrument(skip_all, parent=&env.span)]
+    fn process_front_page_processing_end(&self, env: EventEnvelope, _queue: &mut VecDeque<EventEnvelope>) {
+        ev_guard!(env => FrontPageProcessingEnd );
+        self.state.write().front_page_processor.disable();
+    }
+
+    #[tracing::instrument(skip_all, parent=&env.span)]
+    fn process_front_page_update(&self, env: EventEnvelope, queue: &mut VecDeque<EventEnvelope>) {
+        ev_guard!(env => FrontPageUpdate { stories });
+
+        let topic = self.state.read().notify_data.topic.clone();
+        let story_check: fn(String) -> bool = |text: String| {
+            let checks = vec!["who is hiring", "who's hiring"];
+            for check in checks {
+                if text.to_lowercase().contains(check) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        if stories.iter().any(|s| story_check(s.title.clone().unwrap_or_default())) {
+            let title = "\"HN: Who is hiring\" topic found";
+            tokio::spawn(notify::ntfy_notify(topic, title.into(), "".into()));
+            self.send(EventEnvelope {
+                event: Event::FrontPageProcessingEnd,
+                span: env.span,
+            });
         }
     }
 }

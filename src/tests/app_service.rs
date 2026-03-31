@@ -5,6 +5,7 @@ use std::time::Duration;
 use crate::backend::app_service::Blank;
 use crate::backend::comments::Comment;
 use crate::backend::evaluation::{Evaluation, EvaluationCache};
+use crate::backend::front_page::Story;
 use crate::backend::job_description::JobDescription;
 use crate::backend::notify::NotifyData;
 use crate::models::AppService;
@@ -17,6 +18,7 @@ pub struct AppServiceClosures {
         Arc<dyn for<'a> Fn(&'a str, &'a Path, &'a str, Duration) -> Result<String, String> + Send + Sync>,
     pub parse_job_description: Arc<dyn Fn(llmuxer::LlmConfig, &str) -> Result<JobDescription, String> + Send + Sync>,
     pub notify_evaluation: Arc<dyn Fn(u32, &mut NotifyData, &Evaluation) -> anyhow::Result<()> + Send + Sync>,
+    pub get_front_page_stories: Arc<dyn Fn() -> Vec<Story> + Send + Sync>,
 }
 
 impl Default for AppServiceClosures {
@@ -27,6 +29,7 @@ impl Default for AppServiceClosures {
             create_evaluation_cache: Arc::new(|_, _, _, _| Ok(String::new())),
             parse_job_description: Arc::new(|_, _| Ok(JobDescription::blank())),
             notify_evaluation: Arc::new(|_, _, _| Ok(())),
+            get_front_page_stories: Arc::new(|| vec![]),
         }
     }
 }
@@ -71,5 +74,9 @@ impl AppService for AppServiceClosures {
         evaluation: &Evaluation,
     ) -> anyhow::Result<()> {
         (self.notify_evaluation)(id, notify_data, evaluation)
+    }
+
+    fn get_front_page_stories(&self) -> async_res!(Vec<Story>) {
+        Box::pin(async move { (self.get_front_page_stories)() })
     }
 }
