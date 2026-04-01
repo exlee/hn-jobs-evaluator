@@ -64,10 +64,6 @@ pub struct Barrier {
     remaining: HashSet<BarrierData>,
     then: Vec<Event>,
 }
-pub struct EventEnvelope {
-    pub event: Event,
-    pub span: tracing::Span,
-}
 
 pub struct EventHandler {
     pub state: Arc<RwLock<State>>,
@@ -112,28 +108,6 @@ impl EventHandler {
         }
 
         event_handler
-    }
-    async fn run(&self, mut rx: mpsc::Receiver<EventEnvelope>) {
-        let mut queue: VecDeque<EventEnvelope> = VecDeque::new();
-
-        loop {
-            match rx.recv().await {
-                Some(envelope) => queue.push_back(envelope),
-                None => {
-                    tracing::error!("event channel closed unexpectedly");
-                    break;
-                }
-            }
-
-            while let Ok(envelope) = rx.try_recv() {
-                queue.push_back(envelope);
-            }
-
-            while let Some(envelope) = queue.pop_front() {
-                dbg!(&envelope.event);
-                self.handle(envelope, &mut queue).await;
-            }
-        }
     }
     #[handler(SetNotifications)]
     fn process_set_notifications(&self, enabled: bool) {
@@ -265,7 +239,7 @@ impl EventHandler {
         comment: Comment,
         requirements: String,
         pdf_path: String,
-        permit: Option<Arc<OwnedSemaphorePermit>>,
+        #[serde(skip)] permit: Option<Arc<OwnedSemaphorePermit>>,
     ) {
         {
             let _span = tracing::debug_span!("Create barrier").entered();
@@ -356,7 +330,7 @@ impl EventHandler {
         model: String,
         input: String,
         try_cache: bool,
-        permit: Option<Arc<OwnedSemaphorePermit>>,
+        #[serde(skip)] permit: Option<Arc<OwnedSemaphorePermit>>,
     ) {
         {
             let mut state = self.state.write();
@@ -435,7 +409,7 @@ impl EventHandler {
         requirements: String,
         pdf_path: String,
         retry: usize,
-        permit: Option<Arc<OwnedSemaphorePermit>>,
+        #[serde(skip)] permit: Option<Arc<OwnedSemaphorePermit>>,
         queue: &mut VecDeque<EventEnvelope>,
     ) {
         tracing::debug!("EvaluateTry(...)");

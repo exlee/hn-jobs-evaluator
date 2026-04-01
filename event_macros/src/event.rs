@@ -1,6 +1,6 @@
 use proc_macro2::Span;
 use quote::{ToTokens, quote, quote_spanned};
-use syn::{FnArg, Ident, ImplItem, ItemImpl, Pat, parse_quote, spanned::Spanned as _};
+use syn::{FnArg, Ident, ImplItem, ItemImpl, Pat, parse_macro_input, parse_quote, spanned::Spanned as _};
 
 pub(crate) fn event_processor_impl(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
     let mut item_impl: ItemImpl = syn::parse2(input).expect("Cannot parse input");
@@ -98,31 +98,7 @@ pub(crate) fn event_processor_impl(input: proc_macro2::TokenStream) -> proc_macr
                     .iter()
                     .filter_map(|p| {
                         if let syn::Pat::Ident(ident) = *p.pat.clone() {
-                            let mut attrs = Vec::new();
-
-                            fn check_type_for_skip(ty: &syn::Type) -> bool {
-                                if let syn::Type::Path(type_path) = ty {
-                                    if let Some(segment) = type_path.path.segments.last() {
-                                        if segment.ident == "Arc" || segment.ident == "Rc" {
-                                            return true;
-                                        }
-                                        if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
-                                            for arg in &args.args {
-                                                if let syn::GenericArgument::Type(inner_ty) = arg {
-                                                    if check_type_for_skip(inner_ty) {
-                                                        return true;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                false
-                            }
-
-                            if check_type_for_skip(&p.ty) {
-                                attrs.push(parse_quote!(#[serde(skip)]));
-                            }
+                            let attrs = p.attrs.to_vec().clone();
 
                             Some(syn::Field {
                                 attrs,
@@ -169,7 +145,7 @@ pub(crate) fn event_processor_impl(input: proc_macro2::TokenStream) -> proc_macr
                 let guard_stmt = {
                     let variant_ident = variant_ident.clone();
                     quote! {
-                        let Event::#variant_ident #match_pattern = env.event else { return; };
+                        let Event::#variant_ident #match_pattern = env.event else { unreachable!(); };
                     }
                 };
 
@@ -182,7 +158,7 @@ pub(crate) fn event_processor_impl(input: proc_macro2::TokenStream) -> proc_macr
                 });
 
                 handlers.push(quote_spanned! { method.span() =>
-                    fn #method_name(&self, env: EventEnvelope, queue: &mut VecDeque<EventEnvelope>)  {
+                    fn #method_name(&self, env: EventEnvelope, queue: &mut ::std::collections::VecDeque<EventEnvelope>)  {
                        #guard_stmt
                        #queue_assignment
                        #span_assignment
@@ -205,12 +181,11 @@ pub(crate) fn event_processor_impl(input: proc_macro2::TokenStream) -> proc_macr
     }
     let handle_method = quote! {
        #[tracing::instrument(skip_all, parent=&env.span)]
-       async fn handle(&self, env: EventEnvelope, queue: &mut VecDeque<EventEnvelope>) {
+       async fn handle(&self, env: EventEnvelope, queue: &mut ::std::collections::VecDeque<EventEnvelope>) {
            use Event::*;
            tracing::debug!("handle: {:?}", env.event);
            match env.event {
                #(#match_arms),*
-               ,_ => {},
            }
        }
     };
@@ -254,7 +229,37 @@ pub(crate) fn event_processor_impl(input: proc_macro2::TokenStream) -> proc_macr
         }
     };
 
+    item_impl.items.push(parse_quote! {
+        async fn run(&self, mut rx: ::tokio::sync::mpsc::Receiver<EventEnvelope>) {
+            let mut queue: ::std::collections::VecDeque<EventEnvelope> = ::std::collections::VecDeque::new();
+
+            loop {
+                match rx.recv().await {
+                    Some(envelope) => queue.push_back(envelope),
+                    None => {
+                        tracing::error!("event channel closed unexpectedly");
+                        break;
+                    }
+                }
+
+                while let Ok(envelope) = rx.try_recv() {
+                    queue.push_back(envelope);
+                }
+
+                while let Some(envelope) = queue.pop_front() {
+                    self.handle(envelope, &mut queue).await;
+                }
+            }
+        }
+    });
+
     quote! {
+
+        pub struct EventEnvelope {
+            pub event: Event,
+            pub span: tracing::Span,
+        }
+
         #event_enum
         #debug_impl
         #item_impl
@@ -281,45 +286,81 @@ mod tests {
         prettyplease::unparse(&syntax_tree)
     }
     #[test]
-    fn event_debug_macro_output() {
-        // Define what the input code looks like
+    fn test_1() {
         let input = quote! {
             #[event_processor]
             impl EventHandler {
-                pub fn normal_function() {
-                    return 42
+                #[handler(Event1)]
+                fn handler(#[serde(skip)] test: Vec<Vec<u32>>) {
+                    return;
                 }
+            }
+        };
+        let output = event_processor_impl(input);
+        let formatted = pretty_print(output);
+        insta::assert_snapshot!(formatted);
+    }
+    #[test]
+    fn test_processor_1() {
+        let input = quote! {
+            #[event_processor]
+            impl EventHandler {
                 #[handler(MyStruct)]
                 fn test_processor_1(&self, item: String, value: u32) {
                     println!("Hello world!");
                 }
+            }
+        };
+        let output = event_processor_impl(input);
+        let formatted = pretty_print(output);
+        insta::assert_snapshot!(formatted);
+    }
+
+    #[test]
+    fn test_processor_2() {
+        let input = quote! {
+            #[event_processor]
+            impl EventHandler {
                 #[handler(EventNoFields)]
                 fn test_processor_2(&self) {
                     println!("Hello world!");
                 }
+            }
+        };
+        let output = event_processor_impl(input);
+        let formatted = pretty_print(output);
+        insta::assert_snapshot!(formatted);
+    }
+
+    #[test]
+    fn test_processor_3() {
+        let input = quote! {
+            #[event_processor]
+            impl EventHandler {
                 #[handler(EventNoFieldsEnv)]
                 fn test_processor_3(&self, env: EventEnvelope) {
                     println!("Hello world!");
                 }
-                #[handler(EventNoFieldsEnvArc)]
-                fn test_processor_4(&self, arc: Option<Arc<Something>>) {
-                    println!("Hello world!");
-                }
-
             }
-        }
-        .into();
-
-        // Run your transformation logic
+        };
         let output = event_processor_impl(input);
         let formatted = pretty_print(output);
+        insta::assert_snapshot!(formatted);
+    }
 
-        // PRINT the result so you can see it in your terminal
-        println!("--- MACRO OUTPUT ---");
-        println!("{}", formatted);
-        println!("--------------------");
-
-        // Optional: you can even assert things here
-        assert!(formatted.to_string().contains("generated_test_func"));
+    #[test]
+    fn test_processor_4() {
+        let input = quote! {
+            #[event_processor]
+            impl EventHandler {
+                #[handler(EventNoFieldsEnvArc)]
+                fn test_processor_4(&self, #[serde(skip)] arc: Option<Arc<Something>>) {
+                    println!("Hello world!");
+                }
+            }
+        };
+        let output = event_processor_impl(input);
+        let formatted = pretty_print(output);
+        insta::assert_snapshot!(formatted);
     }
 }

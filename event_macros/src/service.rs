@@ -16,22 +16,22 @@ struct ClosureImpl {
 }
 /// Example usage of `service_handler`:
 ///
-/// ```rust
+///
 /// #[service_handler]
 /// pub trait AppService: Send + Sync {
 ///     #[service(fun=comments::get_comments_from_url,blank=Default::default())]
 ///     async fn get_comments_from_url(&self, url: &str, force: bool) -> Vec<Comment>;
 /// }
-/// ```
+///
 ///
 /// For default implementations:
-/// ```rust
+///
 /// #[service_handler]
 /// pub trait Service: Send + Sync {
 ///     #[service(default = in_module::function)]
 ///     fn some_fun(&self, a: u32, b: String);
 /// }
-/// ```
+///
 pub fn service_handler_impl(_args: TokenStream, input: TokenStream) -> TokenStream {
     let mut trait_item = match parse2::<ItemTrait>(input.clone()) {
         Ok(t) => t,

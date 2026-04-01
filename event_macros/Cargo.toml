@@ -7,6 +7,7 @@ edition = "2024"
 proc-macro = true
 
 [dependencies]
+insta = "1.47.2"
 prettyplease = "0.2.37"
 proc-macro2 = "1.0.106"
 quote = "1.0.45"

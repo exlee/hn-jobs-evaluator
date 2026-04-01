@@ -1,0 +1,64 @@
+---
+source: event_macros/src/event.rs
+expression: formatted
+---
+pub struct EventEnvelope {
+    pub event: Event,
+    pub span: tracing::Span,
+}
+#[derive(Serialize, Deserialize, Clone)]
+pub enum Event {
+    Event1 { #[serde(skip)] test: Vec<Vec<u32>> },
+}
+impl std::fmt::Debug for Event {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Event::Event1 { .. } => write!(f, stringify!(Event1)),
+            _ => write!(f, "Unknown Event"),
+        }
+    }
+}
+impl EventHandler {
+    fn handler(
+        &self,
+        env: EventEnvelope,
+        queue: &mut ::std::collections::VecDeque<EventEnvelope>,
+    ) {
+        let Event::Event1 { test } = env.event else {
+            unreachable!();
+        };
+        {
+            return;
+        }
+    }
+    #[tracing::instrument(skip_all, parent = &env.span)]
+    async fn handle(
+        &self,
+        env: EventEnvelope,
+        queue: &mut ::std::collections::VecDeque<EventEnvelope>,
+    ) {
+        use Event::*;
+        tracing::debug!("handle: {:?}", env.event);
+        match env.event {
+            Event::Event1 { .. } => self.handler(env, queue),
+        }
+    }
+    async fn run(&self, mut rx: ::tokio::sync::mpsc::Receiver<EventEnvelope>) {
+        let mut queue: ::std::collections::VecDeque<EventEnvelope> = ::std::collections::VecDeque::new();
+        loop {
+            match rx.recv().await {
+                Some(envelope) => queue.push_back(envelope),
+                None => {
+                    tracing::error!("event channel closed unexpectedly");
+                    break;
+                }
+            }
+            while let Ok(envelope) = rx.try_recv() {
+                queue.push_back(envelope);
+            }
+            while let Some(envelope) = queue.pop_front() {
+                self.handle(envelope, &mut queue).await;
+            }
+        }
+    }
+}
