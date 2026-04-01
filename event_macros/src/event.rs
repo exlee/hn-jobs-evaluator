@@ -1,6 +1,6 @@
 use proc_macro2::Span;
-use quote::{ToTokens, quote};
-use syn::{FnArg, Ident, ImplItem, ItemImpl, Pat, parse_quote};
+use quote::{ToTokens, quote, quote_spanned};
+use syn::{FnArg, Ident, ImplItem, ItemImpl, Pat, parse_quote, spanned::Spanned as _};
 
 pub(crate) fn event_processor_impl(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
     let mut item_impl: ItemImpl = syn::parse2(input).expect("Cannot parse input");
@@ -181,7 +181,7 @@ pub(crate) fn event_processor_impl(input: proc_macro2::TokenStream) -> proc_macr
                     Event::#variant_ident #event_match => write!(f, stringify!(#variant_ident))
                 });
 
-                handlers.push(quote! {
+                handlers.push(quote_spanned! { method.span() =>
                     fn #method_name(&self, env: EventEnvelope, queue: &mut VecDeque<EventEnvelope>)  {
                        #guard_stmt
                        #queue_assignment

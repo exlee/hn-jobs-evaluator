@@ -234,7 +234,7 @@ impl App {
                 }
                 let comment = &event_state.comments[*i];
                 let Some(evaluation) = event_state.evaluations.get(&comment.id) else {
-                    return false;
+                    return true;
                 };
                 evaluation.score >= state.min_score
             })
@@ -790,6 +790,10 @@ impl eframe::App for App {
         let eh = self.event_handler.clone();
         let estate = eh.state.read().clone();
 
+        if self.state.read().admin_view {
+            self.render_admin_view(ctx);
+        }
+
         egui::CentralPanel::default().show(ctx, |ui| {
             let total_width = ui.available_width();
             ui.vertical(|ui| {
@@ -886,29 +890,6 @@ impl eframe::App for App {
                             ui.label("Notifications");
                         });
 
-                        if estate.processing.enabled {
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 0.0;
-
-                                ui.label("Processing: ");
-                                ui.colored_label(Color32::GREEN, estate.processing.done.to_string());
-                                ui.label("/");
-                                ui.colored_label(Color32::RED, estate.processing.error.to_string());
-                                ui.label(format!("/{}", estate.processing.total));
-                            });
-                        } else if estate.processing.total > 0 {
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 0.0;
-
-                                ui.label("Processing (stopped): ");
-                                ui.colored_label(Color32::GREEN, estate.processing.done.to_string());
-                                ui.label("/");
-                                ui.colored_label(Color32::RED, estate.processing.error.to_string());
-                                ui.label(format!("/{}", estate.processing.total));
-                            });
-                        } else {
-                            ui.label("Processing stopped");
-                        }
                         ui.label(format!("NTFY topic: {}", estate.notify_data.topic));
                         let mut evaluated = 0;
                         for c in estate.comments.iter() {
@@ -920,6 +901,9 @@ impl eframe::App for App {
                         ui.add_space(10.0);
                         ui.separator();
                         ui.with_layout(Layout::left_to_right(egui::Align::Min).with_main_wrap(true), |ui| {
+                            if ui.button("Admin View").clicked() {
+                                state.admin_view = true;
+                            }
                             if ui.button("Select PDF").clicked() {
                                 if let Some(path) = rfd::FileDialog::new().add_filter("PDF", &["pdf"]).pick_file() {
                                     state.pdf_path = Some(path.display().to_string());
@@ -933,14 +917,6 @@ impl eframe::App for App {
                                         url: state.hn_url.clone()
                                     }
                                 );
-                            }
-                            if ui.button("Nuke Evaluations").clicked() {
-                                event!(self, RemoveEvaluationAll);
-                            }
-                            if ui.button("Export State").clicked() {
-                                if let Ok(json_str) = serde_json::to_string(&state.clone()) {
-                                    let _ = std::fs::write("state.json", json_str);
-                                }
                             }
                         });
 
@@ -999,6 +975,64 @@ impl eframe::App for App {
 }
 
 impl App {
+    fn render_admin_view(&mut self, ctx: &egui::Context) {
+        let shared = Arc::clone(&self.state);
+        let events_shared = Arc::clone(&self.event_handler.state);
+        let eh = Arc::clone(&self.event_handler);
+
+        {
+            let shared = shared.clone();
+            ctx.show_viewport_deferred(
+                egui::ViewportId::from_hash_of("admin_window"),
+                egui::ViewportBuilder::default()
+                    .with_title("Admin View")
+                    .with_inner_size([800.0, 600.0]),
+                move |ctx, _class| {
+                    let mut comments_batch = shared.clone().read().admin_comments_batch;
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        ui.vertical(|ui| {
+                            ui.horizontal(|ui| {
+                                egui::ComboBox::from_label("Parent ID")
+                                    .selected_text(comments_batch.to_string())
+                                    .show_ui(ui, |ui| {
+                                        for id in events_shared.read().comments_batches.iter() {
+                                            ui.selectable_value(&mut comments_batch, *id, id.to_string());
+                                        }
+                                    });
+                                if shared.clone().read().admin_comments_batch != comments_batch {
+                                    shared.write().admin_comments_batch = comments_batch;
+                                }
+                                if ui.button("Delete comments").clicked() {
+                                    let batch = shared.clone().read().admin_comments_batch;
+                                    let _ = eh.sender().try_send(EventEnvelope {
+                                        event: Event::DeleteCommentBatch { batch },
+                                        span: tracing::Span::none(),
+                                    });
+                                }
+                            });
+                            if ui.button("Nuke Evaluations").clicked() {
+                                eh.try_send(EventEnvelope {
+                                    event: Event::RemoveEvaluationAll,
+                                    span: tracing::info_span!("nuke evaluations"),
+                                });
+                            }
+                            if ui.button("Export State").clicked() {
+                                let state = shared.read().clone();
+                                if let Ok(json_str) = serde_json::to_string(&state) {
+                                    let _ = std::fs::write("state.json", json_str);
+                                }
+                            }
+                        });
+                    });
+
+                    if ctx.input(|i| i.viewport().close_requested()) {
+                        shared.write().admin_view = false;
+                    }
+                },
+            );
+        }
+    }
+
     fn read_data_from_gui(&self) {
         if let Some(state) = self.state.try_read()
             && let Some(event_state) = self.event_handler.state.try_read()
@@ -1015,7 +1049,7 @@ impl App {
 }
 pub fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([600.0, 800.0]),
+        viewport: egui::ViewportBuilder::default().with_inner_size([1200.0, 1000.0]),
         ..Default::default()
     };
 

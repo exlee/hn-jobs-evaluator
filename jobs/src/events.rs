@@ -42,6 +42,7 @@ pub struct State {
     pub cache_key_error: Option<String>,
     pub evaluations: HashMap<u32, Evaluation>,
     pub comments: Vec<Comment>,
+    pub comments_batches: HashSet<u32>,
     pub job_descriptions: HashMap<u32, JobDescription>,
     pub notify_data: NotifyData,
     pub eval_cache: Option<EvaluationCache>,
@@ -87,6 +88,9 @@ impl EventHandler {
     }
     pub async fn send(&self, env: EventEnvelope) {
         self.tx.read().send(env).await;
+    }
+    pub fn try_send(&self, env: EventEnvelope) {
+        let _ = self.tx.read().try_send(env);
     }
     pub fn spawn(state: Arc<RwLock<State>>, app_service: Arc<dyn AppService>) -> Arc<Self> {
         let (tx, rx) = mpsc::channel(100);
@@ -181,6 +185,7 @@ impl EventHandler {
     }
     #[handler(CommentsUpdate)]
     fn process_comments_update(&self, comments: Vec<Comment>) {
+        tracing::info!("Comments Count: {}", comments.len());
         let mut hm: HashMap<u32, Comment> = self
             .state
             .read()
@@ -190,7 +195,9 @@ impl EventHandler {
             .map(|c| (c.id, c))
             .collect();
 
+        let mut ids_hashset = HashSet::new();
         for c in comments {
+            ids_hashset.insert(c.parent);
             match hm.insert(c.id, c.clone()) {
                 Some(old) => {
                     if old != c {
@@ -200,7 +207,9 @@ impl EventHandler {
                 None => tracing::info!("New comment: {:?}", c),
             }
         }
+        tracing::info!("Writing comments");
         self.state.write().comments = hm.into_values().collect::<Vec<_>>();
+        self.state.write().comments_batches = ids_hashset;
     }
     #[handler(Signal)]
     fn process_signal(&self, id: u32, barrier_data: BarrierData, queue: &mut VecDeque<EventEnvelope>) {
@@ -538,8 +547,11 @@ impl EventHandler {
             });
         }
     }
+    #[handler(DeleteCommentBatch)]
+    fn process_delete_comment_batch(&self, batch: u32) {
+        self.state.write().comments.retain(|c| c.parent != batch);
+    }
 }
-
 impl Serialize for EventHandler {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         self.state.read().serialize(serializer)

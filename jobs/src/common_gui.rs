@@ -85,6 +85,8 @@ pub struct AppState {
     pub batch_processing: bool,
     pub notifications_enabled: bool,
     pub front_page_processing: bool,
+    pub admin_view: bool,
+    pub admin_comments_batch: u32,
 }
 
 // pub struct AppState {
