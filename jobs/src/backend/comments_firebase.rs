@@ -1,19 +1,20 @@
+use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use reqwest::StatusCode;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
 use tokio::time::sleep;
 
-use crate::{
-    backend::comments::{MAX_CACHE_AGE, clean_html},
-    models::Comment,
-};
+use crate::{backend::comments::clean_html, models::Comment};
 
-#[derive(Deserialize, Debug)]
+const CACHE_FILE: &str = "hn_comments_cache.json";
+const EDIT_WINDOW_MINUTES: i64 = 125;
+
+#[derive(Deserialize, Debug, Serialize, Clone)]
 struct HnItem {
     id: u32,
     #[serde(default)]
@@ -30,45 +31,69 @@ struct HnItem {
     dead: bool,
 }
 
-pub async fn get_comments(item_id: u32, force: bool) -> Vec<Comment> {
-    let cache_path = format!("cache_{}.json", item_id);
-    if !force {
-        if let Ok(metadata) = fs::metadata(&cache_path) {
-            let elapsed = metadata.modified().unwrap().elapsed().unwrap_or(MAX_CACHE_AGE);
-            if elapsed < MAX_CACHE_AGE {
-                if let Ok(data) = fs::read_to_string(&cache_path) {
-                    if let Ok(comments) = serde_json::from_str::<Vec<Comment>>(&data) {
-                        return comments;
-                    }
-                }
-            }
-        }
-    }
+pub async fn get_comments(item_id: u32, _force: bool) -> Vec<Comment> {
+    // 1. Load existing cache
+    let mut cache: HashMap<u32, Comment> = fs::read_to_string(CACHE_FILE)
+        .ok()
+        .and_then(|data| serde_json::from_str(&data).ok())
+        .unwrap_or_default();
 
     let semaphore = Arc::new(Semaphore::new(20));
     let client = reqwest::Client::new();
 
+    // 2. Fetch the root item to get the latest list of kids
     let root_item = fetch_hn_item(&client, item_id, Arc::clone(&semaphore)).await;
-    let mut all_comments = Vec::new();
 
+    let mut results = Vec::new();
     if let Some(root) = root_item {
+        let now = Utc::now().timestamp();
         let mut tasks = Vec::new();
+
         for kid_id in root.kids {
-            let client = client.clone();
-            let sem = Arc::clone(&semaphore);
-            tasks.push(tokio::spawn(async move {
-                fetch_single_comment(&client, kid_id, item_id, sem).await
-            }));
+            // Check if we should fetch or use cache
+            let should_fetch = if let Some(cached_comment) = cache.get(&kid_id) {
+                let age_seconds = now - cached_comment.created_at.timestamp();
+                // Re-fetch if it's within the edit window (125 mins)
+                age_seconds < (EDIT_WINDOW_MINUTES * 60)
+            } else {
+                // Not in cache, must fetch
+                true
+            };
+            if should_fetch {
+                let client = client.clone();
+                let sem = Arc::clone(&semaphore);
+                tasks.push(tokio::spawn(async move {
+                    fetch_single_comment(&client, kid_id, item_id, sem).await
+                }));
+            } else {
+                // Use cached version
+                if let Some(comment) = cache.get(&kid_id) {
+                    results.push(comment.clone());
+                }
+            }
         }
 
-        let results = futures::future::join_all(tasks).await.into_iter().flatten().flatten();
-        for comment in results {
-            all_comments.push(comment);
+        // 3. Join all new fetch tasks
+        let fetched_comments = futures::future::join_all(tasks)
+            .await
+            .into_iter()
+            .flatten() // Flatten JoinHandle result
+            .flatten(); // Flatten Option<Comment>
+
+        for comment in fetched_comments {
+            cache.insert(comment.id, comment.clone());
+            results.push(comment);
+        }
+
+        // 4. Update the single cache file
+        if let Ok(data) = serde_json::to_string(&cache) {
+            let _ = fs::write(CACHE_FILE, data);
         }
     }
 
-    let _ = fs::write(&cache_path, serde_json::to_string(&all_comments).unwrap());
-    all_comments
+    // Return only the comments belonging to this specific item_id
+    results.sort_by_key(|c| c.id);
+    results
 }
 
 async fn fetch_single_comment(
@@ -89,7 +114,7 @@ async fn fetch_single_comment(
         text: item.text.as_deref().map(clean_html),
         parent: parent_id,
         created_at: DateTime::from_timestamp(item.time, 0).unwrap_or_else(Utc::now),
-        children: item.kids, // We still keep the IDs of children if the model requires it, but we don't fetch them
+        children: item.kids,
     })
 }
 

@@ -46,7 +46,7 @@ impl NotifyData {
             .unwrap_or(String::from("UNKNOWN"));
 
         let message = format!(
-            "Evaluation Score: {}\n\nTechnologies: {}, Eval: {}\nTech: {}\nComp: {}",
+            "Evaluation Score: {}\n\nTechnologies: {}\n\nEval: {}\n\nTech: {}\n\nComp: {}",
             eval.score, technologies, eval.evaluation, eval.technology_alignment, eval.compensation_alignment
         );
 

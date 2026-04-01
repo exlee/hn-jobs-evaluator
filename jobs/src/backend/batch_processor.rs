@@ -58,19 +58,20 @@ impl BatchProcessor {
                                 } else {
                                     continue;
                                 }
+                            } else {
+                                let _ = tx
+                                    .send(EventEnvelope {
+                                        event: Event::Evaluate {
+                                            try_cache: false,
+                                            comment: comment,
+                                            permit: Some(permit.clone()),
+                                            requirements: requirements.clone(),
+                                            pdf_path: pdf_path.clone(),
+                                        },
+                                        span: tracing::info_span!("evaluate_comment"),
+                                    })
+                                    .await;
                             }
-                            let _ = tx
-                                .send(EventEnvelope {
-                                    event: Event::Evaluate {
-                                        try_cache: false,
-                                        comment: comment,
-                                        permit: Some(permit.clone()),
-                                        requirements: requirements.clone(),
-                                        pdf_path: pdf_path.clone(),
-                                    },
-                                    span: tracing::info_span!("evaluate_comment"),
-                                })
-                                .await;
                         } else {
                             // Semaphore closed, stop processing
                             return;

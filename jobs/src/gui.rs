@@ -515,23 +515,97 @@ impl App {
                                                         }
                                                         job.append("\n", 0.0, egui::text::TextFormat::default());
                                                     }
+                                                    let mut urls = Vec::new();
 
                                                     // Add remaining lines
                                                     if lines.len() > 1 {
-                                                        job.append(
-                                                            lines[1].trim_start(),
-                                                            0.0,
-                                                            egui::text::TextFormat {
-                                                                font_id: egui::FontId::proportional(TABLE_FONT_SIZE),
-                                                                color: ui.visuals().text_color(),
-                                                                line_height: Some(20.0),
-                                                                ..Default::default()
-                                                            },
-                                                        );
+                                                        let remaining_text = lines[1].trim_start();
+
+                                                        // Split by newlines to preserve formatting
+                                                        let paragraphs: Vec<&str> =
+                                                            remaining_text.split('\n').collect();
+                                                        for (i, paragraph) in paragraphs.iter().enumerate() {
+                                                            if i > 0 {
+                                                                job.append(
+                                                                    "\n",
+                                                                    0.0,
+                                                                    egui::text::TextFormat {
+                                                                        font_id: egui::FontId::proportional(
+                                                                            TABLE_FONT_SIZE,
+                                                                        ),
+                                                                        color: ui.visuals().text_color(),
+                                                                        line_height: Some(20.0),
+                                                                        ..Default::default()
+                                                                    },
+                                                                );
+                                                            }
+
+                                                            // Split paragraph into words and check for URLs
+                                                            let words: Vec<&str> = paragraph.split(' ').collect();
+                                                            let mut url_index = 0;
+                                                            for (j, word) in words.iter().enumerate() {
+                                                                if j > 0 {
+                                                                    job.append(
+                                                                        " ",
+                                                                        0.0,
+                                                                        egui::text::TextFormat {
+                                                                            font_id: egui::FontId::proportional(
+                                                                                TABLE_FONT_SIZE,
+                                                                            ),
+                                                                            color: ui.visuals().text_color(),
+                                                                            line_height: Some(20.0),
+                                                                            ..Default::default()
+                                                                        },
+                                                                    );
+                                                                }
+
+                                                                if word.starts_with("http://")
+                                                                    || word.starts_with("https://")
+                                                                {
+                                                                    urls.push(word.to_string());
+                                                                };
+                                                                {
+                                                                    job.append(
+                                                                        word,
+                                                                        0.0,
+                                                                        egui::text::TextFormat {
+                                                                            font_id: egui::FontId::proportional(
+                                                                                TABLE_FONT_SIZE,
+                                                                            ),
+                                                                            color: ui.visuals().text_color(),
+                                                                            line_height: Some(20.0),
+                                                                            ..Default::default()
+                                                                        },
+                                                                    );
+                                                                }
+                                                            }
+                                                            // Add URLs at the end
+                                                        }
                                                     }
 
                                                     job.wrap.max_width = ui.available_width();
                                                     ui.add(egui::Label::new(job).wrap());
+                                                    if !urls.is_empty() {
+                                                        let is_modded_color = flags.val() > 0;
+                                                        ui.vertical(|ui| {
+                                                            ui.add_space(20.0);
+                                                            for (_i, url) in urls.iter().enumerate() {
+                                                                if is_modded_color {
+                                                                    ui.hyperlink_to(
+                                                                        egui::RichText::new(url)
+                                                                            .line_height(Some(20.0))
+                                                                            .font(egui::FontId::proportional(
+                                                                                TABLE_FONT_SIZE,
+                                                                            ))
+                                                                            .color(ui.visuals().text_color()),
+                                                                        url,
+                                                                    );
+                                                                } else {
+                                                                    ui.hyperlink_to(url, url);
+                                                                }
+                                                            }
+                                                        });
+                                                    }
                                                 });
                                         },
                                     );
@@ -754,7 +828,7 @@ fn evaluate_button(
 
         for e in vec![
             Event::Evaluate {
-                try_cache: true,
+                try_cache: false,
                 comment: comment.clone(),
                 requirements,
                 pdf_path,

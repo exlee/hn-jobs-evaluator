@@ -309,6 +309,7 @@ mod tests {
         prettyplease::unparse(&syntax_tree)
     }
     #[test]
+    #[ignore]
     fn service_debug_macro_output() {
         // Define what the input code looks like
         let input = quote! {

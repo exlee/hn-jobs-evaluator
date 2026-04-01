@@ -1,222 +1,220 @@
-use proc_macro2::Span;
-use quote::{ToTokens, quote, quote_spanned};
-use syn::{FnArg, Ident, ImplItem, ItemImpl, Pat, parse_macro_input, parse_quote, spanned::Spanned as _};
+use proc_macro2::{Span, TokenStream};
+use quote::{ToTokens, quote};
+use syn::{
+    Attribute, Field, FieldMutability, Fields, FieldsNamed, FnArg, Ident, ImplItem, ImplItemFn, ItemEnum, ItemImpl,
+    Pat, PatType, Variant, parse_quote, parse_quote_spanned, spanned::Spanned as _,
+};
 
-pub(crate) fn event_processor_impl(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+pub(crate) fn event_processor_impl(input: TokenStream) -> TokenStream {
     let mut item_impl: ItemImpl = syn::parse2(input).expect("Cannot parse input");
-    let mut match_arms = Vec::new();
-    let mut debug_arms = Vec::new();
-    let mut handlers = Vec::new();
-    let mut events = Vec::new();
+    let mut context = ProcessorContext::default();
+
     let mut i = 0;
     while i < item_impl.items.len() {
-        let should_remove = if let ImplItem::Fn(method) = &mut item_impl.items[i] {
+        if let ImplItem::Fn(ref mut method) = item_impl.items[i] {
             if let Some(attr) = find_and_remove_handler_attr(&mut method.attrs) {
-                let variant_ident: Ident = attr.parse_args().expect("Expected ident in #[handler()]");
-                let method_name = &method.sig.ident;
-                let method_body = &method.block;
-                let span_ident = method.sig.inputs.iter().find_map(|arg| {
-                    if let FnArg::Typed(pat_type) = arg {
-                        let ty_str = pat_type.ty.to_token_stream().to_string();
-                        if ty_str.ends_with("EventEnvelope") {
-                            if let Pat::Ident(pat_ident) = &*pat_type.pat {
-                                return Some(pat_ident.ident.clone());
-                            }
-                        }
-                    }
-                    None
-                });
-                let queue_ident = method.sig.inputs.iter().find_map(|arg| {
-                    if let FnArg::Typed(pat_type) = arg {
-                        let ty_str = pat_type.ty.to_token_stream().to_string();
-                        if ty_str.contains("VecDeque") && ty_str.contains("EventEnvelope") {
-                            if let Pat::Ident(pat_ident) = &*pat_type.pat {
-                                return Some(pat_ident.ident.clone());
-                            }
-                        }
-                    }
-                    None
-                });
-                let method_inputs = method
-                    .sig
-                    .inputs
-                    .clone()
-                    .into_iter()
-                    .filter(|arg| {
-                        if let FnArg::Typed(pat_type) = arg {
-                            let ty_str = pat_type.ty.to_token_stream().to_string();
-                            let is_envelope = ty_str.ends_with("EventEnvelope");
-                            let is_queue = ty_str.contains("VecDeque") && ty_str.contains("EventEnvelope");
-                            !is_envelope && !is_queue
-                        } else {
-                            false
-                        }
-                    })
-                    .collect::<Vec<FnArg>>();
-
-                let span_assignment = if let Some(ident) = span_ident {
-                    quote! {
-                        let #ident = env;
-                    }
-                } else {
-                    quote! {}
-                };
-                let queue_assignment = if let Some(ident) = queue_ident {
-                    quote! {
-                        let #ident = queue;
-                    }
-                } else {
-                    quote! {}
-                };
-
-                let mut sig = method.sig.clone();
-                let new_inputs = method_inputs
-                    .clone()
-                    .into_iter()
-                    .filter(|arg| !matches!(arg, FnArg::Receiver(_)))
-                    .collect();
-                sig.inputs = new_inputs;
-                let pat_fields: Vec<syn::PatType> = method_inputs
-                    .clone()
-                    .iter()
-                    .filter_map(|arg| {
-                        if let FnArg::Typed(pat) = arg {
-                            Some(pat.clone())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                let event_match = if pat_fields.is_empty() {
-                    quote! {}
-                } else {
-                    quote! {{..}}
-                };
-
-                let variant_fields_vec: Vec<syn::Field> = pat_fields
-                    .clone()
-                    .iter()
-                    .filter_map(|p| {
-                        if let syn::Pat::Ident(ident) = *p.pat.clone() {
-                            let attrs = p.attrs.to_vec().clone();
-
-                            Some(syn::Field {
-                                attrs,
-                                vis: parse_quote!(),
-                                mutability: syn::FieldMutability::None,
-                                ident: Some(ident.ident),
-                                colon_token: None,
-                                ty: *p.ty.clone(),
-                            })
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                let variant_fields = if variant_fields_vec.is_empty() {
-                    syn::Fields::Unit
-                } else {
-                    syn::Fields::Named(syn::FieldsNamed {
-                        brace_token: syn::token::Brace::default(),
-                        named: variant_fields_vec.into_iter().collect(),
-                    })
-                };
-
-                let enum_variant = syn::Variant {
-                    attrs: vec![],
-                    ident: variant_ident.clone(),
-                    fields: variant_fields,
-                    discriminant: None,
-                };
-                events.push(enum_variant);
-                let field_names = pat_fields.iter().map(|pf| {
-                    if let syn::Pat::Ident(ident) = *pf.pat.clone() {
-                        quote! { #ident }
-                    } else {
-                        panic!("Expected identifier in function arguments")
-                    }
-                });
-                let match_pattern = if field_names.clone().count() == 0 {
-                    quote! {}
-                } else {
-                    quote! {{ #(#field_names),* }}
-                };
-
-                let guard_stmt = {
-                    let variant_ident = variant_ident.clone();
-                    quote! {
-                        let Event::#variant_ident #match_pattern = env.event else { unreachable!(); };
-                    }
-                };
-
-                match_arms.push(quote! {
-                    Event::#variant_ident #event_match => self.#method_name(env, queue)
-                });
-
-                debug_arms.push(quote! {
-                    Event::#variant_ident #event_match => write!(f, stringify!(#variant_ident))
-                });
-
-                handlers.push(quote_spanned! { method.span() =>
-                    fn #method_name(&self, env: EventEnvelope, queue: &mut ::std::collections::VecDeque<EventEnvelope>)  {
-                       #guard_stmt
-                       #queue_assignment
-                       #span_assignment
-                       #method_body
-                   }
-                });
-                true
-            } else {
-                false
+                let handler = process_handler_method(method, attr);
+                context.push_handler(handler);
+                item_impl.items.remove(i);
+                continue;
             }
+        }
+        i += 1;
+    }
+
+    generate_output(item_impl, context)
+}
+
+#[derive(Default)]
+struct ProcessorContext {
+    match_arms: Vec<TokenStream>,
+    debug_arms: Vec<TokenStream>,
+    handlers: Vec<ImplItem>,
+    events: Vec<Variant>,
+}
+
+impl ProcessorContext {
+    fn push_handler(&mut self, handler: HandlerResult) {
+        let variant_ident = &handler.variant_ident;
+        let method_name = &handler.method_name;
+        let event_match = if handler.has_fields {
+            quote! {{..}}
         } else {
-            false
+            quote! {}
         };
 
-        if should_remove {
-            item_impl.items.remove(i);
-        } else {
-            i += 1;
-        }
+        self.match_arms.push(quote! {
+            Event::#variant_ident #event_match => self.#method_name(env, queue)
+        });
+
+        self.debug_arms.push(quote! {
+            Event::#variant_ident #event_match => write!(f, stringify!(#variant_ident))
+        });
+
+        self.events.push(handler.event_variant);
+        self.handlers.push(handler.generated_method);
     }
-    let handle_method = quote! {
-       #[tracing::instrument(skip_all, parent=&env.span)]
-       async fn handle(&self, env: EventEnvelope, queue: &mut ::std::collections::VecDeque<EventEnvelope>) {
-           use Event::*;
-           tracing::debug!("handle: {:?}", env.event);
-           match env.event {
-               #(#match_arms),*
-           }
-       }
+}
+
+struct HandlerResult {
+    variant_ident: Ident,
+    method_name: Ident,
+    event_variant: Variant,
+    generated_method: ImplItem,
+    has_fields: bool,
+}
+
+fn process_handler_method(method: &ImplItemFn, attr: Attribute) -> HandlerResult {
+    let variant_ident: Ident = attr.parse_args().expect("Expected ident in #[handler()]");
+    let method_name = method.sig.ident.clone();
+    let method_body = &method.block;
+
+    let (envelope_ident, queue_ident, other_args) = analyze_method_inputs(&method.sig.inputs);
+
+    let span_assignment = envelope_ident.map(|id| quote! { let #id = env; }).unwrap_or_default();
+    let queue_assignment = queue_ident.map(|id| quote! { let #id = queue; }).unwrap_or_default();
+
+    let pat_fields: Vec<PatType> = other_args
+        .iter()
+        .filter_map(|arg| {
+            if let FnArg::Typed(pat) = arg {
+                Some(pat.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let event_variant = create_event_variant(variant_ident.clone(), &pat_fields);
+    let guard_stmt = create_guard_statement(&variant_ident, &pat_fields);
+    let has_fields = !pat_fields.is_empty();
+
+    let generated_method = parse_quote_spanned! { method.span() =>
+        fn #method_name(&self, env: EventEnvelope, queue: &mut ::std::collections::VecDeque<EventEnvelope>) {
+            #guard_stmt
+            #queue_assignment
+            #span_assignment
+            #method_body
+        }
     };
 
-    let event_enum = syn::ItemEnum {
-        attrs: parse_quote! {
-            #[derive(Serialize, Deserialize, Clone )]
-        },
+    HandlerResult {
+        variant_ident,
+        method_name,
+        event_variant,
+        generated_method,
+        has_fields,
+    }
+}
+
+fn analyze_method_inputs(
+    inputs: &syn::punctuated::Punctuated<FnArg, syn::token::Comma>,
+) -> (Option<Ident>, Option<Ident>, Vec<FnArg>) {
+    let mut envelope_ident = None;
+    let mut queue_ident = None;
+    let mut other_args = Vec::new();
+
+    for arg in inputs {
+        if let FnArg::Typed(pat_type) = arg {
+            let ty_str = pat_type.ty.to_token_stream().to_string();
+            let is_envelope = ty_str.ends_with("EventEnvelope");
+            let is_queue = ty_str.contains("VecDeque") && ty_str.contains("EventEnvelope");
+
+            if is_envelope {
+                if let Pat::Ident(pat_ident) = &*pat_type.pat {
+                    envelope_ident = Some(pat_ident.ident.clone());
+                }
+            } else if is_queue {
+                if let Pat::Ident(pat_ident) = &*pat_type.pat {
+                    queue_ident = Some(pat_ident.ident.clone());
+                }
+            } else {
+                other_args.push(arg.clone());
+            }
+        } else {
+            other_args.push(arg.clone());
+        }
+    }
+
+    (envelope_ident, queue_ident, other_args)
+}
+
+fn create_event_variant(ident: Ident, pat_fields: &[PatType]) -> Variant {
+    let fields_vec: Vec<Field> = pat_fields
+        .iter()
+        .filter_map(|p| {
+            if let Pat::Ident(pat_ident) = &*p.pat {
+                Some(Field {
+                    attrs: p.attrs.clone(),
+                    vis: parse_quote!(),
+                    mutability: FieldMutability::None,
+                    ident: Some(pat_ident.ident.clone()),
+                    colon_token: None,
+                    ty: (*p.ty).clone(),
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let fields = if fields_vec.is_empty() {
+        Fields::Unit
+    } else {
+        Fields::Named(FieldsNamed {
+            brace_token: Default::default(),
+            named: fields_vec.into_iter().collect(),
+        })
+    };
+
+    Variant {
+        attrs: Vec::new(),
+        ident,
+        fields,
+        discriminant: None,
+    }
+}
+
+fn create_guard_statement(variant_ident: &Ident, pat_fields: &[PatType]) -> TokenStream {
+    let field_names: Vec<_> = pat_fields
+        .iter()
+        .map(|pf| {
+            if let Pat::Ident(ident) = &*pf.pat {
+                quote! { #ident }
+            } else {
+                panic!("Expected identifier in function arguments")
+            }
+        })
+        .collect();
+
+    let match_pattern = if field_names.is_empty() {
+        quote! {}
+    } else {
+        quote! {{ #(#field_names),* }}
+    };
+
+    quote! {
+        let Event::#variant_ident #match_pattern = env.event else { unreachable!(); };
+    }
+}
+
+fn generate_output(mut item_impl: ItemImpl, context: ProcessorContext) -> TokenStream {
+    let ProcessorContext {
+        match_arms,
+        debug_arms,
+        handlers,
+        events,
+    } = context;
+
+    let event_enum = ItemEnum {
+        attrs: parse_quote! { #[derive(Serialize, Deserialize, Clone)] },
         vis: parse_quote!(pub),
-        enum_token: syn::token::Enum::default(),
-        ident: syn::Ident::new("Event", Span::call_site()),
-        generics: syn::Generics::default(),
-        brace_token: syn::token::Brace::default(),
+        enum_token: Default::default(),
+        ident: Ident::new("Event", Span::call_site()),
+        generics: Default::default(),
+        brace_token: Default::default(),
         variants: events.into_iter().collect(),
     };
-
-    for handler in handlers {
-        let hs = handler.clone().to_string();
-        match syn::parse2(handler) {
-            Ok(h) => item_impl.items.push(h),
-            Err(e) => {
-                eprintln!("Failed to parse handler:\n{}\nError: {}", hs, e);
-                return e.to_compile_error().into();
-            }
-        }
-    }
-    //#(#handlers),*
-    item_impl
-        .items
-        .push(syn::parse2(handle_method).expect("Failed to parse generated handle method"));
-    item_impl.attrs.retain(|attr| !attr.path().is_ident("event_processor"));
 
     let debug_impl = quote! {
         impl std::fmt::Debug for Event {
@@ -229,10 +227,22 @@ pub(crate) fn event_processor_impl(input: proc_macro2::TokenStream) -> proc_macr
         }
     };
 
+    item_impl.items.extend(handlers);
+
+    item_impl.items.push(parse_quote! {
+        #[tracing::instrument(skip_all, parent=&env.span)]
+        async fn handle(&self, env: EventEnvelope, queue: &mut ::std::collections::VecDeque<EventEnvelope>) {
+            use Event::*;
+            tracing::debug!("handle: {:?}", env.event);
+            match env.event {
+                #(#match_arms),*
+            }
+        }
+    });
+
     item_impl.items.push(parse_quote! {
         async fn run(&self, mut rx: ::tokio::sync::mpsc::Receiver<EventEnvelope>) {
             let mut queue: ::std::collections::VecDeque<EventEnvelope> = ::std::collections::VecDeque::new();
-
             loop {
                 match rx.recv().await {
                     Some(envelope) => queue.push_back(envelope),
@@ -241,11 +251,9 @@ pub(crate) fn event_processor_impl(input: proc_macro2::TokenStream) -> proc_macr
                         break;
                     }
                 }
-
                 while let Ok(envelope) = rx.try_recv() {
                     queue.push_back(envelope);
                 }
-
                 while let Some(envelope) = queue.pop_front() {
                     self.handle(envelope, &mut queue).await;
                 }
@@ -253,19 +261,20 @@ pub(crate) fn event_processor_impl(input: proc_macro2::TokenStream) -> proc_macr
         }
     });
 
-    quote! {
+    item_impl.attrs.retain(|attr| !attr.path().is_ident("event_processor"));
 
+    quote! {
         pub struct EventEnvelope {
             pub event: Event,
             pub span: tracing::Span,
         }
-
         #event_enum
         #debug_impl
         #item_impl
     }
 }
-fn find_and_remove_handler_attr(attrs: &mut Vec<syn::Attribute>) -> Option<syn::Attribute> {
+
+fn find_and_remove_handler_attr(attrs: &mut Vec<Attribute>) -> Option<Attribute> {
     let index = attrs.iter().position(|attr| attr.path().is_ident("handler"))?;
     Some(attrs.remove(index))
 }

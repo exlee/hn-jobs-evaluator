@@ -34,6 +34,9 @@ impl Flags {
     bitset!(HIDE = hide);
     bitset!(SEEN = seen);
     bitset!(IN_PROGRESS = in_progress);
+    pub fn val(&self) -> u8 {
+        return self.0;
+    }
 }
 
 impl PartialOrd for Flags {
