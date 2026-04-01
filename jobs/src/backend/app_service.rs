@@ -24,18 +24,6 @@ pub trait Blank {
     fn blank() -> Self;
 }
 
-impl Blank for Evaluation {
-    fn blank() -> Self {
-        Evaluation {
-            evaluation: String::new(),
-            technology_alignment: String::new(),
-            compensation_alignment: String::new(),
-            score: 0,
-            job_description: None,
-        }
-    }
-}
-
 impl Blank for JobDescription {
     fn blank() -> Self {
         JobDescription::default()
@@ -62,7 +50,7 @@ pub trait AppService: Send + Sync {
     async fn get_comments_from_url(&self, url: String, force: bool) -> Vec<Comment>;
 
     #[function(crate::backend::evaluation::evaluate_comment_cached)]
-    #[blank(Ok(Evaluation::blank()))]
+    #[blank(Ok(Evaluation::default()))]
     async fn evaluate_comment_cached(
         &self,
         comment: Comment,

@@ -127,6 +127,7 @@ async fn generate_evaluation() -> anyhow::Result<Evaluation> {
 
     std::thread::sleep(std::time::Duration::from_millis(1500));
     Ok(Evaluation {
+        not_a_job_listing: false,
         evaluation: evaluations.choose(&mut rng).unwrap().to_string(),
         technology_alignment: tech_alignments.choose(&mut rng).unwrap().to_string(),
         compensation_alignment: comp_alignments.choose(&mut rng).unwrap().to_string(),

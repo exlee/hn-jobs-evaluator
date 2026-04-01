@@ -10,8 +10,9 @@ use crate::backend::job_description::JobDescription;
 
 pub const MODEL: &str = "gemini-3.1-flash-lite-preview";
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Default, Debug, Clone)]
 pub struct Evaluation {
+    pub not_a_job_listing: bool,
     pub evaluation: String,
     pub technology_alignment: String,
     pub compensation_alignment: String,
@@ -75,6 +76,8 @@ pub async fn evaluate_comment_cached(
             "response_schema": {
                 "type": "object",
                 "properties": {
+
+                    "not_a_job_listing": { "type": "boolean" },
                     "evaluation": { "type": "string" },
                     "technology_alignment": { "type": "string" },
                     "compensation_alignment": { "type": "string" },

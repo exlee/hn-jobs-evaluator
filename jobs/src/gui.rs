@@ -207,6 +207,14 @@ impl App {
         let mut indices: Vec<usize> = indices
             .into_iter()
             .filter(|i| {
+                let comment = &event_state.comments[*i];
+                if let Some(evaluation) = event_state.evaluations.get(&comment.id) {
+                    !evaluation.not_a_job_listing
+                } else {
+                    true
+                }
+            })
+            .filter(|i| {
                 if state.search_string.is_empty() {
                     return true;
                 }
@@ -225,7 +233,7 @@ impl App {
                     return true;
                 }
                 let comment = &event_state.comments[*i];
-                let Some(evaluation) = &event_state.evaluations.get(&comment.id) else {
+                let Some(evaluation) = event_state.evaluations.get(&comment.id) else {
                     return false;
                 };
                 evaluation.score >= state.min_score
@@ -235,7 +243,7 @@ impl App {
                     return true;
                 }
                 let comment = &event_state.comments[*i];
-                let Some(flags) = &event_state.flags.get(&comment.id) else {
+                let Some(flags) = event_state.flags.get(&comment.id) else {
                     return true;
                 };
                 if flags.get_seen() { false } else { true }
@@ -245,7 +253,7 @@ impl App {
                     return true;
                 }
                 let comment = &event_state.comments[*i];
-                let Some(flags) = &event_state.flags.get(&comment.id) else {
+                let Some(flags) = event_state.flags.get(&comment.id) else {
                     return true;
                 };
                 if flags.get_in_progress() { false } else { true }

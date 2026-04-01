@@ -1,26 +1,16 @@
-// pub mod app_service;
-// pub mod autofetcher;
-// pub mod batch_processor;
-// pub mod comments;
-// pub mod common_gui;
-// pub mod evaluation;
-// pub mod events;
-// pub mod gui;
-// pub mod job_description;
-// pub mod notify;
 pub mod common_gui;
 pub mod demo;
 pub mod events;
 pub mod gui;
 pub mod tokens;
 
-// The backend module is private to the crate, or pub(crate)
-// It contains the implementation details that GUI should not touch.
 mod backend {
     pub mod app_service;
     pub mod autofetcher;
     pub mod batch_processor;
     pub mod comments;
+    pub mod comments_algolia;
+    pub mod comments_firebase;
     pub mod evaluation;
     pub mod front_page;
     pub mod job_description;
@@ -37,5 +27,11 @@ pub mod models {
     pub use crate::backend::job_description::{JobDescription, JobDescriptions};
 }
 
+pub mod api {
+
+    pub mod firebase {
+        pub use crate::backend::comments_firebase::get_comments;
+    }
+}
 #[cfg(test)]
 mod tests;
